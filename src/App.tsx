@@ -9,6 +9,7 @@ import { VisibilityDialog, type VisibilityKind } from "./components/VisibilityDi
 import type { Screen } from "./components/navigation";
 import { MOCK_RATE_LIMITED } from "./data/mock";
 import type { VsuiGroup } from "./data/vsuiGroups";
+import { useAppVersion } from "./hooks/useAppVersion";
 import { useElementWidth } from "./hooks/useElementWidth";
 import { useGroupInstances } from "./hooks/useGroupInstances";
 import { useSocial } from "./hooks/useSocial";
@@ -22,7 +23,6 @@ import { LoginScreen } from "./screens/LoginScreen";
 import { RecommendScreen } from "./screens/RecommendScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 
-const APP_VERSION = "0.1.0";
 const RATE_LIMIT_RETRY_MS = 240_000;
 const SIDEBAR_OPEN_WIDTH = 256;
 /** main 領域の左右 padding 分の余白 */
@@ -48,6 +48,7 @@ export default function App() {
     toggleGroupCollapsed,
   } = useUserSettings(currentUser?.id ?? null);
   const { toast, showToast, hideToast } = useToast();
+  const appVersion = useAppVersion((version) => showToast(`Updated to version ${version}`));
   const { friends, groups, updatedAt } = useSocial({
     isSignedIn: currentUser !== null,
     pinnedFriendIds,
@@ -156,8 +157,8 @@ export default function App() {
                   {screen === "recommend" && (
                     <RecommendScreen onOpenGroupPage={openGroupPageInBrowser} />
                   )}
-                  {screen === "settings" && <SettingsScreen version={APP_VERSION} />}
-                  {screen === "info" && <AboutScreen version={APP_VERSION} />}
+                  {screen === "settings" && <SettingsScreen version={appVersion} />}
+                  {screen === "info" && <AboutScreen version={appVersion} />}
                 </div>
               </OverlayScrollArea>
             </main>
