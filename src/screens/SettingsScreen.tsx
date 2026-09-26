@@ -110,7 +110,7 @@ function UpdateSettingRow({ version, updater }: { version: string; updater: Upda
   const releaseNotes = update?.body?.trim();
 
   return (
-    <div className="settings-row">
+    <div className="settings-row update-setting-row">
       <div className="settings-row-text">
         <span className="settings-row-title">Updates</span>
         <span className="settings-row-description">
