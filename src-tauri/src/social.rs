@@ -49,7 +49,8 @@ impl FriendStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FriendLocation {
-    World { world_id: String },
+    /// `location` は `wrld_…:…` 形式の全体 (インスタンスを開くのに使う)
+    World { world_id: String, location: String },
     Private,
     Traveling,
     /// ゲーム外 (Web サイト上) でオンライン
@@ -64,7 +65,9 @@ impl FriendLocation {
             "offline" => Self::Offline,
             "traveling" => Self::Traveling,
             _ => match location.split_once(':') {
-                Some((world_id, _)) if world_id.starts_with("wrld_") => Self::World { world_id: world_id.to_owned() },
+                Some((world_id, _)) if world_id.starts_with("wrld_") => {
+                    Self::World { world_id: world_id.to_owned(), location: location.to_owned() }
+                }
                 _ => Self::Private,
             },
         }
@@ -118,6 +121,8 @@ pub struct FriendView {
     name: String,
     status: FriendStatus,
     location_kind: &'static str,
+    /// locationKind が world のときのみ。`wrld_…:…` 形式
+    location: Option<String>,
     world_name: Option<String>,
     /// pinned かつ World 名が未取得 (取得待ち・取得中)
     is_world_loading: bool,
@@ -178,9 +183,9 @@ impl SocialStore {
         self.friends
             .values()
             .map(|friend| {
-                let world_name = match &friend.location {
-                    FriendLocation::World { world_id } => self.world_names.get(world_id).cloned(),
-                    _ => None,
+                let (location, world_name) = match &friend.location {
+                    FriendLocation::World { world_id, location } => (Some(location.clone()), self.world_names.get(world_id).cloned()),
+                    _ => (None, None),
                 };
                 let is_in_world = matches!(friend.location, FriendLocation::World { .. });
                 FriendView {
@@ -188,6 +193,7 @@ impl SocialStore {
                     name: friend.name.clone(),
                     status: if friend.location == FriendLocation::Offline { FriendStatus::Offline } else { friend.status },
                     location_kind: friend.location.kind(),
+                    location,
                     is_world_loading: is_in_world && world_name.is_none() && self.pinned.contains(&friend.id),
                     world_name,
                 }
@@ -200,7 +206,7 @@ impl SocialStore {
         let mut candidates: Vec<&FriendEntry> = self.pinned.iter().filter_map(|id| self.friends.get(id)).collect();
         candidates.sort_by(|a, b| a.name.cmp(&b.name));
         candidates.into_iter().find_map(|friend| match &friend.location {
-            FriendLocation::World { world_id }
+            FriendLocation::World { world_id, .. }
                 if !self.world_names.contains_key(world_id)
                     && self.world_retry_at.get(world_id).is_none_or(|at| now >= *at) =>
             {
@@ -527,7 +533,7 @@ mod tests {
     fn parses_locations() {
         assert_eq!(
             FriendLocation::from_api("wrld_abc:123~group(grp_1)"),
-            FriendLocation::World { world_id: "wrld_abc".into() }
+            FriendLocation::World { world_id: "wrld_abc".into(), location: "wrld_abc:123~group(grp_1)".into() }
         );
         assert_eq!(FriendLocation::from_api("private"), FriendLocation::Private);
         assert_eq!(FriendLocation::from_api("traveling"), FriendLocation::Traveling);
@@ -544,6 +550,7 @@ mod tests {
         store.pinned.insert("a".into());
         let views = store.friend_views();
         assert_eq!(view(&views, "a").location_kind, "world");
+        assert_eq!(view(&views, "a").location.as_deref(), Some("wrld_x:1"));
         assert!(view(&views, "a").is_world_loading);
         assert_eq!(view(&views, "b").location_kind, "website");
         assert_eq!(view(&views, "c").status, FriendStatus::Offline);

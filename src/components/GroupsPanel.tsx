@@ -5,6 +5,7 @@ import { useNow } from "../hooks/useNow";
 import { formatClock } from "../lib/format";
 import type { Group, GroupAccessType, GroupInstance } from "../lib/social";
 import { ChevronDownIcon, GroupsIcon, VisibilityListIcon } from "./icons";
+import { OpenInstanceButton } from "./OpenInstanceButton";
 import { OverlayScrollArea } from "./OverlayScrollArea";
 
 interface GroupsPanelProps {
@@ -13,7 +14,9 @@ interface GroupsPanelProps {
   shownGroupIds: Record<string, boolean>;
   collapsedGroupIds: Record<string, boolean>;
   onToggleCollapsed: (groupId: string) => void;
-  onOpenInstance: (label: string) => void;
+  /** Open ボタンを無効化する理由。開ける状態なら null */
+  openDisabledReason: string | null;
+  onOpenInstance: (location: string, label: string) => void;
   onManage: () => void;
 }
 
@@ -34,6 +37,7 @@ export function GroupsPanel({
   shownGroupIds,
   collapsedGroupIds,
   onToggleCollapsed,
+  openDisabledReason,
   onOpenInstance,
   onManage,
 }: GroupsPanelProps) {
@@ -136,9 +140,10 @@ export function GroupsPanel({
                             </span>
                           </div>
                         </div>
-                        <button className="btn-accent open-button" onClick={() => onOpenInstance(instance.worldName)}>
-                          Open
-                        </button>
+                        <OpenInstanceButton
+                          disabledReason={openDisabledReason}
+                          onClick={() => onOpenInstance(instance.id, instance.worldName)}
+                        />
                       </div>
                     ))}
                   </div>

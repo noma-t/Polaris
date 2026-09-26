@@ -25,7 +25,8 @@ export function friendLocationLabel(friend: Friend): string {
 }
 
 /** Open できる (World 名が判明しているインスタンス内にいる) か */
-export const canOpenFriendLocation = (friend: Friend) => friend.locationKind === "world" && friend.worldName !== null;
+export const canOpenFriendLocation = (friend: Friend): friend is Friend & { location: string; worldName: string } =>
+  friend.locationKind === "world" && friend.location !== null && friend.worldName !== null;
 
 /**
  * 一覧での並び順:

@@ -10,6 +10,8 @@ export interface Friend {
   name: string;
   status: FriendStatus;
   locationKind: FriendLocationKind;
+  /** locationKind が world のときのみ。`wrld_…:…` 形式 */
+  location: string | null;
   /** locationKind が world で、名前を取得済みのときのみ */
   worldName: string | null;
   /** pinned かつ World 名の取得待ち・取得中 */

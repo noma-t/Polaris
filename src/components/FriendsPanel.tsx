@@ -1,16 +1,19 @@
 import { canOpenFriendLocation, compareFriends, FRIEND_STATUS_META, friendLocationLabel } from "../lib/friendStatus";
 import type { Friend } from "../lib/social";
 import { FriendIcon, VisibilityListIcon } from "./icons";
+import { OpenInstanceButton } from "./OpenInstanceButton";
 import { OverlayScrollArea } from "./OverlayScrollArea";
 
 interface FriendsPanelProps {
   friends: Friend[];
   pinnedIds: Record<string, boolean>;
-  onOpenInstance: (label: string) => void;
+  /** Open ボタンを無効化する理由。開ける状態なら null */
+  openDisabledReason: string | null;
+  onOpenInstance: (location: string, label: string) => void;
   onManage: () => void;
 }
 
-export function FriendsPanel({ friends, pinnedIds, onOpenInstance, onManage }: FriendsPanelProps) {
+export function FriendsPanel({ friends, pinnedIds, openDisabledReason, onOpenInstance, onManage }: FriendsPanelProps) {
   const pinned = friends.filter((f) => pinnedIds[f.id]).sort(compareFriends);
 
   return (
@@ -30,7 +33,6 @@ export function FriendsPanel({ friends, pinnedIds, onOpenInstance, onManage }: F
 
         <div className="friend-list">
           {pinned.map((friend) => {
-            const canOpen = canOpenFriendLocation(friend);
             return (
               <div key={friend.id} className={`friend-row ${friend.locationKind === "offline" ? "is-offline" : ""}`}>
                 <div className="friend-info">
@@ -42,7 +44,7 @@ export function FriendsPanel({ friends, pinnedIds, onOpenInstance, onManage }: F
                     <span className="friend-location" aria-busy="true" aria-label="Loading world name">
                       <span className="friend-world is-loading" />
                     </span>
-                  ) : canOpen ? (
+                  ) : canOpenFriendLocation(friend) ? (
                     <span className="friend-location">
                       <span className="friend-world">{friend.worldName}</span>
                     </span>
@@ -50,10 +52,11 @@ export function FriendsPanel({ friends, pinnedIds, onOpenInstance, onManage }: F
                     <span className="friend-location-hidden">{friendLocationLabel(friend)}</span>
                   )}
                 </div>
-                {canOpen && (
-                  <button className="btn-accent open-button" onClick={() => onOpenInstance(friend.worldName ?? friend.name)}>
-                    Open
-                  </button>
+                {canOpenFriendLocation(friend) && (
+                  <OpenInstanceButton
+                    disabledReason={openDisabledReason}
+                    onClick={() => onOpenInstance(friend.location, friend.worldName)}
+                  />
                 )}
               </div>
             );

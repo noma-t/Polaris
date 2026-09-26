@@ -24,7 +24,9 @@ interface InstancesScreenProps {
   shownGroupIds: Record<string, boolean>;
   collapsedGroupIds: Record<string, boolean>;
   onToggleGroupCollapsed: (groupId: string) => void;
-  onOpenInstance: (label: string) => void;
+  /** Open ボタンを無効化する理由。開ける状態なら null */
+  openDisabledReason: string | null;
+  onOpenInstance: (location: string, label: string) => void;
   onManageFriends: () => void;
   onManageGroups: () => void;
 }
@@ -37,6 +39,7 @@ export function InstancesScreen({
   shownGroupIds,
   collapsedGroupIds,
   onToggleGroupCollapsed,
+  openDisabledReason,
   onOpenInstance,
   onManageFriends,
   onManageGroups,
@@ -104,6 +107,7 @@ export function InstancesScreen({
               shownGroupIds={shownGroupIds}
               collapsedGroupIds={collapsedGroupIds}
               onToggleCollapsed={onToggleGroupCollapsed}
+              openDisabledReason={openDisabledReason}
               onOpenInstance={onOpenInstance}
               onManage={onManageGroups}
             />
@@ -127,7 +131,13 @@ export function InstancesScreen({
               <FriendIcon size={26} className="panel-title-icon" />
             </button>
           ) : (
-            <FriendsPanel friends={friends} pinnedIds={pinnedFriendIds} onOpenInstance={onOpenInstance} onManage={onManageFriends} />
+            <FriendsPanel
+              friends={friends}
+              pinnedIds={pinnedFriendIds}
+              openDisabledReason={openDisabledReason}
+              onOpenInstance={onOpenInstance}
+              onManage={onManageFriends}
+            />
           )}
         </section>
       </div>

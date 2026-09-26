@@ -11,12 +11,14 @@ import { MOCK_RATE_LIMITED } from "./data/mock";
 import type { VsuiGroup } from "./data/vsuiGroups";
 import { useAppVersion } from "./hooks/useAppVersion";
 import { useElementWidth } from "./hooks/useElementWidth";
+import { useGameStatus } from "./hooks/useGameStatus";
 import { useGroupInstances } from "./hooks/useGroupInstances";
 import { useSocial } from "./hooks/useSocial";
 import { useUserSettings } from "./hooks/useUserSettings";
 import { useToast } from "./hooks/useToast";
 import { logout, restoreSession, type CurrentUser } from "./lib/auth";
 import { formatClock } from "./lib/format";
+import { openInstanceDisabledReason, openInstanceInGame } from "./lib/game";
 import { AboutScreen } from "./screens/AboutScreen";
 import { InstancesScreen, MIN_GROUPS_WIDTH } from "./screens/InstancesScreen";
 import { LoginScreen } from "./screens/LoginScreen";
@@ -64,6 +66,8 @@ export default function App() {
     onError: (message) => showToast(message, "error"),
   });
   const lastUpdatedAt = Math.max(updatedAt ?? 0, groupState.updatedAt ?? 0) || null;
+  const gameStatus = useGameStatus();
+  const openDisabledReason = openInstanceDisabledReason(gameStatus);
 
   const completeSignIn = (user: CurrentUser) => {
     setCurrentUser(user);
@@ -105,7 +109,11 @@ export default function App() {
   };
 
   const closeVisibilityDialog = useCallback(() => setVisibilityDialog(null), []);
-  const openInVRChat = (label: string) => showToast(`Opened “${label}” in VRChat`);
+  const openInVRChat = (location: string, label: string) => {
+    openInstanceInGame(location)
+      .then(() => showToast(`Opened “${label}” in VRChat`))
+      .catch(() => showToast(`Failed to open “${label}” in VRChat`, "error"));
+  };
   const openGroupPageInBrowser = (group: VsuiGroup) => {
     openUrl(`https://vrchat.com/home/group/${group.groupId}`).catch(() => showToast(`Failed to open “${group.name}” in browser`, "error"));
   };
@@ -149,6 +157,7 @@ export default function App() {
                       shownGroupIds={shownGroupIds}
                       collapsedGroupIds={collapsedGroupIds}
                       onToggleGroupCollapsed={toggleGroupCollapsed}
+                      openDisabledReason={openDisabledReason}
                       onOpenInstance={openInVRChat}
                       onManageFriends={() => setVisibilityDialog("friends")}
                       onManageGroups={() => setVisibilityDialog("groups")}
@@ -157,13 +166,19 @@ export default function App() {
                   {screen === "recommend" && (
                     <RecommendScreen onOpenGroupPage={openGroupPageInBrowser} />
                   )}
-                  {screen === "settings" && <SettingsScreen version={appVersion} />}
+                  {screen === "settings" && (
+                    <SettingsScreen
+                      version={appVersion}
+                      isLauncherFound={gameStatus.isLauncherFound}
+                      onError={(message) => showToast(message, "error")}
+                    />
+                  )}
                   {screen === "info" && <AboutScreen version={appVersion} />}
                 </div>
               </OverlayScrollArea>
             </main>
           </div>
-          <StatusBar updatedAt={lastUpdatedAt} />
+          <StatusBar updatedAt={lastUpdatedAt} isGameRunning={gameStatus.isRunning} />
         </div>
       )}
 
