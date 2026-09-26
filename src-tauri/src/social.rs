@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::async_runtime::JoinHandle;
@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 
 use crate::pipeline::{self, PipelineEvent};
 use crate::vrchat_client::{AuthError, VrchatClient, FRIENDS_PAGE_SIZE};
-use crate::vrchat_models::ApiFriend;
+use crate::vrchat_models::{ApiFriend, ApiInstance};
 
 pub const FRIENDS_UPDATED_EVENT: &str = "social://friends-updated";
 pub const GROUPS_UPDATED_EVENT: &str = "social://groups-updated";
@@ -130,6 +130,36 @@ pub struct GroupView {
     name: String,
 }
 
+/// グループインスタンス 1 件分の表示用データ
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupInstanceView {
+    /// `wrld_…:…` 形式の location
+    id: String,
+    group_id: String,
+    world_name: String,
+    /// `"public"` / `"plus"` / `"members"`
+    access_type: &'static str,
+    user_count: u32,
+    capacity: u32,
+    /// API に作成時刻が無いため、Polaris が初めて観測した時刻 (epoch ms) を表示に使う
+    first_seen_at: i64,
+    /// Created ソート用の値。大きいほど新しい。API はおおむね作成が新しい順に返すので、レスポンス内の位置を逆順にして振る
+    created_order: u32,
+}
+
+fn group_access_type_from_api(access_type: &str) -> &'static str {
+    match access_type {
+        "public" => "public",
+        "plus" => "plus",
+        _ => "members",
+    }
+}
+
+fn now_epoch_ms() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+}
+
 #[derive(Default)]
 struct SocialStore {
     /// start / stop のたびに進める。古いセッションのタスクによる書き込みを捨てるために使う
@@ -139,6 +169,8 @@ struct SocialStore {
     world_names: HashMap<String, String>,
     world_retry_at: HashMap<String, Instant>,
     groups: Vec<GroupView>,
+    /// グループインスタンスの location → 初めて観測した時刻 (epoch ms)
+    instance_first_seen: HashMap<String, i64>,
 }
 
 impl SocialStore {
@@ -203,6 +235,35 @@ impl SocialStore {
         } else if let Some(user) = user.filter(|u| u.id == user_id) {
             self.friends.insert(user_id.to_owned(), FriendEntry::from_api(user, location));
         }
+    }
+
+    /// 取得したグループインスタンスから表示用データを作る。
+    /// 初めて見る location は `now_ms` を記録し、今回含まれなかった (閉じた) location の記録は破棄する
+    fn apply_group_instances(&mut self, instances: Vec<ApiInstance>, now_ms: i64) -> Vec<GroupInstanceView> {
+        let mut first_seen = HashMap::new();
+        let count = instances.len();
+        let views = instances
+            .into_iter()
+            .enumerate()
+            .filter(|(_, inst)| !inst.location.is_empty() && inst.owner_id.starts_with("grp_") && !inst.world.name.is_empty())
+            .map(|(index, inst)| {
+                let first_seen_at = *first_seen
+                    .entry(inst.location.clone())
+                    .or_insert_with(|| self.instance_first_seen.get(&inst.location).copied().unwrap_or(now_ms));
+                GroupInstanceView {
+                    id: inst.location,
+                    group_id: inst.owner_id,
+                    world_name: inst.world.name,
+                    access_type: group_access_type_from_api(&inst.group_access_type),
+                    user_count: inst.user_count,
+                    capacity: inst.capacity,
+                    first_seen_at,
+                    created_order: (count - 1 - index) as u32,
+                }
+            })
+            .collect();
+        self.instance_first_seen = first_seen;
+        views
     }
 
     /// pipeline イベントを適用する。Friends の snapshot を送り直す必要があれば true
@@ -379,11 +440,13 @@ impl Session {
 pub struct SocialState {
     store: Arc<Mutex<SocialStore>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
+    /// ログイン中のセッション。コマンドからの API 呼び出しに使う
+    session: Mutex<Option<Session>>,
 }
 
 impl SocialState {
     pub fn new() -> Self {
-        Self { store: Arc::default(), tasks: Mutex::default() }
+        Self { store: Arc::default(), tasks: Mutex::default(), session: Mutex::default() }
     }
 
     /// ログイン完了時に呼ぶ。初期同期・pipeline・World 名取得のタスクを起動する
@@ -399,9 +462,10 @@ impl SocialState {
                 initial_sync.sync_groups().await;
             }),
             tauri::async_runtime::spawn(session.clone().run_pipeline()),
-            tauri::async_runtime::spawn(session.run_world_queue()),
+            tauri::async_runtime::spawn(session.clone().run_world_queue()),
         ];
         *self.tasks.lock().expect("social tasks poisoned") = tasks;
+        *self.session.lock().expect("social session poisoned") = Some(session);
     }
 
     /// ログアウト時に呼ぶ。全タスクを止めて状態を破棄する
@@ -409,6 +473,7 @@ impl SocialState {
         for task in self.tasks.lock().expect("social tasks poisoned").drain(..) {
             task.abort();
         }
+        *self.session.lock().expect("social session poisoned") = None;
         let mut store = self.store.lock().expect("social store poisoned");
         let generation = store.generation + 1;
         *store = SocialStore { generation, ..SocialStore::default() };
@@ -420,6 +485,21 @@ impl SocialState {
 
     pub fn group_views(&self) -> Vec<GroupView> {
         self.store.lock().expect("social store poisoned").groups.clone()
+    }
+
+    /// 所属する全グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
+    pub async fn fetch_group_instances(&self) -> Result<Vec<GroupInstanceView>, AuthError> {
+        let session = self.session.lock().expect("social session poisoned").clone().ok_or(AuthError::Unauthorized)?;
+        let list = match session.client.get_user_group_instances(&session.user_id).await {
+            Ok(list) => list,
+            Err(error) => {
+                session.handle_error(&error);
+                return Err(error);
+            }
+        };
+        session
+            .with_store(|store| store.apply_group_instances(list.instances, now_epoch_ms()))
+            .ok_or(AuthError::Unauthorized)
     }
 
     /// pinned を置き換え、`is_world_loading` が変わるので snapshot を返す
@@ -494,6 +574,41 @@ mod tests {
         store.apply(&PipelineEvent::FriendDelete { user_id: "a".into() });
         assert!(store.friend_views().is_empty());
         assert!(store.pinned.is_empty());
+    }
+
+    fn api_instance(location: &str, access_type: &str) -> ApiInstance {
+        ApiInstance {
+            location: location.into(),
+            owner_id: "grp_1".into(),
+            user_count: 3,
+            capacity: 16,
+            group_access_type: access_type.into(),
+            world: ApiWorld { id: "wrld_a".into(), name: "Quiet Shore".into() },
+        }
+    }
+
+    #[test]
+    fn keeps_first_seen_time_of_group_instances() {
+        let mut store = SocialStore::default();
+        let views = store.apply_group_instances(vec![api_instance("wrld_a:1", "public"), api_instance("wrld_a:2", "plus")], 100);
+        assert_eq!(views.iter().map(|v| v.first_seen_at).collect::<Vec<_>>(), [100, 100]);
+        assert_eq!(views[0].access_type, "public");
+        assert_eq!(views[1].access_type, "plus");
+
+        let views = store.apply_group_instances(vec![api_instance("wrld_a:2", "plus"), api_instance("wrld_a:3", "members")], 200);
+        assert_eq!(views[0].first_seen_at, 100);
+        assert_eq!(views[1].first_seen_at, 200);
+        assert_eq!(views[1].access_type, "members");
+        assert_eq!(views.iter().map(|v| v.created_order).collect::<Vec<_>>(), [1, 0]);
+        assert!(!store.instance_first_seen.contains_key("wrld_a:1"));
+    }
+
+    #[test]
+    fn drops_non_group_instances() {
+        let mut store = SocialStore::default();
+        let mut not_group = api_instance("wrld_a:1", "public");
+        not_group.owner_id = "usr_1".into();
+        assert!(store.apply_group_instances(vec![not_group], 100).is_empty());
     }
 
     #[test]

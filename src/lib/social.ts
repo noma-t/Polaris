@@ -21,8 +21,26 @@ export interface Group {
   name: string;
 }
 
+/** public: Group Public / plus: Group+ / members: Group (メンバー限定) */
+export type GroupAccessType = "public" | "plus" | "members";
+
+export interface GroupInstance {
+  /** `wrld_…:…` 形式の location */
+  id: string;
+  groupId: string;
+  worldName: string;
+  accessType: GroupAccessType;
+  userCount: number;
+  capacity: number;
+  /** Polaris が初めて観測した時刻 (epoch ms)。API に作成時刻が無いため代用する */
+  firstSeenAt: number;
+  /** Created ソート用の値。大きいほど新しい (API のレスポンス順から算出) */
+  createdOrder: number;
+}
+
 export const getFriends = () => invoke<Friend[]>("social_get_friends");
 export const getGroups = () => invoke<Group[]>("social_get_groups");
+export const getGroupInstances = () => invoke<GroupInstance[]>("social_get_group_instances");
 export const setPinnedFriends = (ids: string[]) => invoke<void>("social_set_pinned_friends", { ids });
 
 export const onFriendsUpdated = (handler: (friends: Friend[]) => void): Promise<UnlistenFn> =>

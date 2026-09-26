@@ -104,6 +104,7 @@ export function InstancesScreen({
               shownGroupIds={shownGroupIds}
               collapsedGroupIds={collapsedGroupIds}
               onToggleCollapsed={onToggleGroupCollapsed}
+              onOpenInstance={onOpenInstance}
               onManage={onManageGroups}
             />
           )}

@@ -45,7 +45,6 @@ export default function App() {
     toggleShownGroup,
     toggleGroupCollapsed,
   } = useUserSettings(currentUser?.id ?? null);
-  const groupState = useGroupInstances();
   const { toast, showToast, hideToast } = useToast();
   const { friends, groups, updatedAt } = useSocial({
     isSignedIn: currentUser !== null,
@@ -55,6 +54,13 @@ export default function App() {
       void signOut();
     },
   });
+  const hasOpenGroup = screen === "instances" && groups.some((g) => shownGroupIds[g.id] && !collapsedGroupIds[g.id]);
+  const groupState = useGroupInstances({
+    isSignedIn: currentUser !== null,
+    hasOpenGroup,
+    onError: (message) => showToast(message, "error"),
+  });
+  const lastUpdatedAt = Math.max(updatedAt ?? 0, groupState.updatedAt ?? 0) || null;
 
   const completeSignIn = (user: CurrentUser) => {
     setCurrentUser(user);
@@ -151,7 +157,7 @@ export default function App() {
               </OverlayScrollArea>
             </main>
           </div>
-          <StatusBar updatedAt={updatedAt} />
+          <StatusBar updatedAt={lastUpdatedAt} />
         </div>
       )}
 

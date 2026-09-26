@@ -1,6 +1,7 @@
 import { REFRESH_COOLDOWN_SEC, type GroupInstancesState, type SortKey } from "../hooks/useGroupInstances";
 import { useNow } from "../hooks/useNow";
-import type { Group } from "../lib/social";
+import { formatClock } from "../lib/format";
+import type { Group, GroupAccessType, GroupInstance } from "../lib/social";
 import { ChevronDownIcon, GroupsIcon, VisibilityListIcon } from "./icons";
 import { OverlayScrollArea } from "./OverlayScrollArea";
 
@@ -10,6 +11,7 @@ interface GroupsPanelProps {
   shownGroupIds: Record<string, boolean>;
   collapsedGroupIds: Record<string, boolean>;
   onToggleCollapsed: (groupId: string) => void;
+  onOpenInstance: (label: string) => void;
   onManage: () => void;
 }
 
@@ -18,20 +20,36 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: "created", label: "Created" },
 ];
 
+const ACCESS_TYPE_LABELS: Record<GroupAccessType, string> = {
+  public: "Group Public",
+  plus: "Group+",
+  members: "Group",
+};
+
 export function GroupsPanel({
   groups,
   groupState,
   shownGroupIds,
   collapsedGroupIds,
   onToggleCollapsed,
+  onOpenInstance,
   onManage,
 }: GroupsPanelProps) {
-  const { sort, cooldownUntil, refreshGroup, selectSort } = groupState;
+  const { sort, cooldownUntil, instancesByGroup, isLoading, hasLoadFailed, refreshGroup, selectSort } = groupState;
   const isCoolingCandidate = cooldownUntil > Date.now();
   const now = useNow(100, isCoolingCandidate);
   const cooldownMs = Math.min(REFRESH_COOLDOWN_SEC * 1000, Math.max(0, cooldownUntil - now));
   const isCooling = cooldownMs > 0;
   const shownGroups = groups.filter((g) => shownGroupIds[g.id]);
+
+  const compareInstances = (a: GroupInstance, b: GroupInstance) =>
+    sort.key === "users"
+      ? sort.usersDir === "desc"
+        ? b.userCount - a.userCount
+        : a.userCount - b.userCount
+      : sort.createdDir === "new"
+        ? b.createdOrder - a.createdOrder
+        : a.createdOrder - b.createdOrder;
 
   return (
     <>
@@ -70,12 +88,16 @@ export function GroupsPanel({
         <div className="group-list">
           {shownGroups.map((group) => {
             const isOpen = !collapsedGroupIds[group.id];
+            const instances = instancesByGroup?.[group.id] ?? [];
+            const count = instances.length;
+            const rows = isOpen ? instances.slice().sort(compareInstances) : [];
             return (
               <div key={group.id} className={`group-card ${isOpen ? "is-open" : ""}`}>
                 <div className="group-card-header">
                   <button className="group-toggle" onClick={() => onToggleCollapsed(group.id)} aria-expanded={isOpen}>
                     <span className="group-toggle-chevron">{isOpen ? "▼" : "▶"}</span>
                     <span className="group-name">{group.name}</span>
+                    {instancesByGroup && <span className={`group-instance-count ${count ? "" : "is-zero"}`}>{count}</span>}
                   </button>
                   {isOpen && (
                     <button className="group-refresh-button" onClick={refreshGroup} disabled={isCooling}>
@@ -89,8 +111,31 @@ export function GroupsPanel({
                 </div>
                 {isOpen && (
                   <div className="group-instance-list">
-                    {/* インスタンス取得は未実装 */}
-                    <div className="group-list-message">No instances</div>
+                    {!instancesByGroup && (
+                      <div className="group-list-message">{hasLoadFailed && !isLoading ? "Failed to load instances" : "Loading…"}</div>
+                    )}
+                    {instancesByGroup && count === 0 && <div className="group-list-message">No instances</div>}
+                    {rows.map((instance) => (
+                      <div key={instance.id} className="instance-row">
+                        <div className="instance-info">
+                          <div className="instance-primary">
+                            <span className="instance-world">{instance.worldName}</span>
+                            <span className={`instance-user-count ${instance.userCount >= instance.capacity ? "is-full" : ""}`}>
+                              ({instance.userCount}/{instance.capacity})
+                            </span>
+                          </div>
+                          <div className="instance-secondary">
+                            <span className="instance-access-type">{ACCESS_TYPE_LABELS[instance.accessType]}</span>
+                            <span className="instance-created" title="First seen by Polaris">
+                              {formatClock(instance.firstSeenAt)}
+                            </span>
+                          </div>
+                        </div>
+                        <button className="btn-accent open-button" onClick={() => onOpenInstance(instance.worldName)}>
+                          Open
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

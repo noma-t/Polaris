@@ -11,7 +11,7 @@ use reqwest::{
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::vrchat_models::{ApiFriend, ApiUserGroup, ApiWorld};
+use crate::vrchat_models::{ApiFriend, ApiGroupInstanceList, ApiUserGroup, ApiWorld};
 
 const API_BASE: &str = "https://api.vrchat.cloud/api/1";
 /// VRChat API は識別可能な User-Agent を必須としている
@@ -247,6 +247,11 @@ impl VrchatClient {
 
     pub async fn get_user_groups(&self, user_id: &str) -> Result<Vec<ApiUserGroup>, AuthError> {
         self.get_json(Self::api_url(&format!("/users/{}/groups", urlencoding::encode(user_id)))).await
+    }
+
+    /// 所属する全グループのインスタンスを 1 リクエストで取得する
+    pub async fn get_user_group_instances(&self, user_id: &str) -> Result<ApiGroupInstanceList, AuthError> {
+        self.get_json(Self::api_url(&format!("/users/{}/instances/groups", urlencoding::encode(user_id)))).await
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(&self, url: Url) -> Result<T, AuthError> {

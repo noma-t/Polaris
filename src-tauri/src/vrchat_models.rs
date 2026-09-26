@@ -30,3 +30,25 @@ pub struct ApiUserGroup {
     pub group_id: String,
     pub name: String,
 }
+
+/// `GET /users/{id}/instances/groups` のレスポンス
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ApiGroupInstanceList {
+    pub instances: Vec<ApiInstance>,
+}
+
+/// Instance のうちグループインスタンスの表示に使うフィールド
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ApiInstance {
+    /// `wrld_…:…` 形式。インスタンスの識別に使う
+    pub location: String,
+    /// グループインスタンスでは `grp_…` 形式の group ID
+    pub owner_id: String,
+    pub user_count: u32,
+    pub capacity: u32,
+    /// `"public"` / `"plus"` / `"members"`
+    pub group_access_type: String,
+    pub world: ApiWorld,
+}

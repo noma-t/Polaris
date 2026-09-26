@@ -976,6 +976,15 @@ a:hover {
   font-size: 16px;
   font-weight: 600;
 }
+.group-instance-count {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--color-text);
+}
+.group-instance-count.is-zero {
+  color: var(--color-text-muted);
+}
 .group-refresh-button {
   position: relative;
   overflow: hidden;
