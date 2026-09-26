@@ -1,0 +1,56 @@
+:root {
+  /* Surface */
+  --color-bg: oklch(0.17 0.005 250);
+  --color-panel: oklch(0.14 0.005 250);
+  --color-input-bg: oklch(0.13 0.005 250);
+  --color-card: oklch(0.22 0.006 250);
+  --color-card-open: oklch(0.2 0.006 250);
+  --color-raised: oklch(0.27 0.008 250);
+  --color-hover: oklch(0.2 0.006 250);
+  --color-menu: oklch(0.18 0.006 250);
+  --color-menu-hover: oklch(0.24 0.007 250);
+  --color-key-sub: oklch(0.21 0.006 250);
+  --color-key-pressed: oklch(0.36 0.01 250);
+
+  /* Text */
+  --color-text: oklch(0.95 0.004 250);
+  --color-text-muted: oklch(0.78 0.008 250);
+
+  /* Line */
+  --color-line: oklch(0.42 0.01 250);
+  --color-line-soft: oklch(0.32 0.008 250);
+  --color-divider: oklch(0.3 0.008 250);
+  --color-row-divider: oklch(0.28 0.008 250);
+  --color-line-open: oklch(0.4 0.01 250);
+
+  /* Scrollbar */
+  --color-scrollbar-thumb: oklch(0.62 0.01 250 / 0.6);
+  --color-scrollbar-thumb-hover: oklch(0.72 0.01 250 / 0.8);
+
+  /* Disabled */
+  --color-disabled-bg: oklch(0.19 0.005 250);
+  --color-disabled-text: oklch(0.6 0.008 250);
+  --color-disabled-border: oklch(0.3 0.008 250);
+
+  /* Accent */
+  --color-accent: oklch(0.8 0.09 195);
+  --color-accent-ink: oklch(0.2 0.03 195);
+  --color-accent-hover: oklch(0.88 0.07 195);
+  --color-progress: oklch(0.55 0.05 195);
+  --color-warn: oklch(0.82 0.12 45);
+  --color-warn-bg: oklch(0.27 0.05 45);
+  --color-warn-border: oklch(0.55 0.11 45);
+
+  /* Logo */
+  --logo-line: #5900ff;
+  --logo-star: #ffffff;
+
+  /* Typography */
+  --font-ui: "Baloo 2", "IBM Plex Sans JP", sans-serif;
+  --font-name: "IBM Plex Sans JP", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+
+  /* Motion */
+  --ease-panel: cubic-bezier(0.3, 0, 0.2, 1);
+  --ease-pop: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
