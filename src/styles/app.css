@@ -825,10 +825,11 @@ a:hover {
   margin: 0 -16px;
 }
 .panel-body {
+  --panel-body-padding-top: 10px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 10px 16px 16px;
+  padding: var(--panel-body-padding-top) 16px 16px;
   box-sizing: border-box;
 }
 /* 1 カラム時は従来通り main 全体でスクロールする */
@@ -943,6 +944,20 @@ a:hover {
   gap: 8px;
   padding: 6px;
 }
+/* 展開中はスクロールしても group 名が panel 上端に貼り付く。
+   sticky はスクロールコンテナの padding 内側で止まるため、panel-body の padding-top 分だけ上へずらして隙間を無くす */
+.group-card.is-open .group-card-header {
+  position: sticky;
+  top: calc(-1 * var(--panel-body-padding-top));
+  z-index: 2;
+  background: var(--color-card-open);
+  border-bottom: 1px solid var(--color-line-soft);
+  border-radius: 6px 6px 0 0;
+}
+/* 1 カラム時は main 全体でスクロールし panel-header も sticky なので、その直下に貼り付ける */
+.instances-grid:not(.is-two-column) .group-card.is-open .group-card-header {
+  top: var(--groups-panel-header-height, 68px);
+}
 .group-toggle {
   flex: 1;
   min-width: 0;
@@ -1014,7 +1029,6 @@ a:hover {
 .group-instance-list {
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--color-line-soft);
 }
 .group-list-message {
   padding: 12px 14px;

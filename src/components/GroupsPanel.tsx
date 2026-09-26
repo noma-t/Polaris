@@ -1,3 +1,5 @@
+import { useRef, type CSSProperties } from "react";
+import { useElementHeight } from "../hooks/useElementHeight";
 import { REFRESH_COOLDOWN_SEC, type GroupInstancesState, type SortKey } from "../hooks/useGroupInstances";
 import { useNow } from "../hooks/useNow";
 import { formatClock } from "../lib/format";
@@ -41,6 +43,9 @@ export function GroupsPanel({
   const cooldownMs = Math.min(REFRESH_COOLDOWN_SEC * 1000, Math.max(0, cooldownUntil - now));
   const isCooling = cooldownMs > 0;
   const shownGroups = groups.filter((g) => shownGroupIds[g.id]);
+  const headerRef = useRef<HTMLDivElement>(null);
+  // 1 カラム時は panel-header も sticky なので、group-card-header はその直下に貼り付ける
+  const headerHeight = useElementHeight(headerRef, 68);
 
   const compareInstances = (a: GroupInstance, b: GroupInstance) =>
     sort.key === "users"
@@ -53,7 +58,7 @@ export function GroupsPanel({
 
   return (
     <>
-      <div className="panel-header groups-panel-header">
+      <div ref={headerRef} className="panel-header groups-panel-header">
         <h2 className="panel-title">
           <GroupsIcon size={26} className="panel-title-icon" />
           Groups
@@ -85,7 +90,7 @@ export function GroupsPanel({
       <OverlayScrollArea viewportClassName="panel-body">
         {shownGroups.length === 0 && <div className="panel-empty">No groups shown</div>}
 
-        <div className="group-list">
+        <div className="group-list" style={{ "--groups-panel-header-height": `${headerHeight}px` } as CSSProperties}>
           {shownGroups.map((group) => {
             const isOpen = !collapsedGroupIds[group.id];
             const instances = instancesByGroup?.[group.id] ?? [];
