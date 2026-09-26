@@ -31,6 +31,7 @@ tokio = { version = "1", features = ["sync", "time", "macros"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
