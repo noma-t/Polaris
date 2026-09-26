@@ -621,6 +621,21 @@ a:hover {
   border-radius: 0 2px 2px 0;
   background: var(--color-accent);
 }
+.sidebar-nav-icon {
+  position: relative;
+  flex: none;
+  display: flex;
+}
+.sidebar-nav-badge {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--color-notice);
+  box-shadow: 0 0 0 2px var(--color-panel);
+}
 .sidebar-footer {
   margin-top: auto;
   display: flex;

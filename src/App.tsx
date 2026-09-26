@@ -167,6 +167,7 @@ export default function App() {
               username={currentUser?.displayName ?? ""}
               userIconUrl={currentUser?.iconUrl ?? null}
               canExpand={layoutWidth >= SIDEBAR_EXPANDABLE_MIN_WIDTH}
+              badgedScreens={updater.isUpdateAvailable ? ["settings"] : []}
               onNavigate={navigate}
               onSignOut={signOut}
             />

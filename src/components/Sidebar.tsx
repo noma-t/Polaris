@@ -11,11 +11,13 @@ interface SidebarProps {
   userIconUrl: string | null;
   /** false の間は幅不足のため rail (折りたたみ) 表示に固定し、展開操作も無効にする */
   canExpand: boolean;
+  /** 右上に通知 badge (ドット) を付ける nav item */
+  badgedScreens: NavScreen[];
   onNavigate: (screen: NavScreen) => void;
   onSignOut: () => void;
 }
 
-export function Sidebar({ activeScreen, username, userIconUrl, canExpand, onNavigate, onSignOut }: SidebarProps) {
+export function Sidebar({ activeScreen, username, userIconUrl, canExpand, badgedScreens, onNavigate, onSignOut }: SidebarProps) {
   const [isOpenPreferred, setIsOpenPreferred] = useState(true);
   const isOpen = isOpenPreferred && canExpand;
   const isExpandable = canExpand && !isOpen;
@@ -57,6 +59,7 @@ export function Sidebar({ activeScreen, username, userIconUrl, canExpand, onNavi
         <nav className="sidebar-nav">
           {NAV_ITEMS.map(({ screen, label, Icon }) => {
             const isActive = screen === activeScreen;
+            const hasBadge = badgedScreens.includes(screen);
             return (
               <button
                 key={screen}
@@ -67,7 +70,10 @@ export function Sidebar({ activeScreen, username, userIconUrl, canExpand, onNavi
                 title={label}
               >
                 {isActive && <span className="sidebar-nav-indicator" />}
-                <Icon size={24} />
+                <span className="sidebar-nav-icon">
+                  <Icon size={24} />
+                  {hasBadge && <span className="sidebar-nav-badge" aria-hidden="true" />}
+                </span>
                 <span className="sidebar-label">{label}</span>
               </button>
             );
