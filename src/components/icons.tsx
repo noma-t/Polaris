@@ -151,3 +151,12 @@ export const DownloadIcon = (p: IconProps) => (
     <line x1="4" y1="17" x2="16" y2="17" />
   </StrokeIcon>
 );
+
+/** 外部リンク (ブラウザで開く) */
+export const ExternalLinkIcon = (p: IconProps) => (
+  <StrokeIcon {...p} strokeWidth={2.2}>
+    <path d="M18 13.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4.5" />
+    <polyline points="14 4 20 4 20 10" />
+    <line x1="11" y1="13" x2="20" y2="4" />
+  </StrokeIcon>
+);

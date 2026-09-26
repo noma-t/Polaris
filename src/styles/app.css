@@ -1396,6 +1396,10 @@ a:hover {
   text-wrap: pretty;
 }
 .recommend-open-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   margin-top: auto;
   min-height: 44px;
   font-size: 15px;

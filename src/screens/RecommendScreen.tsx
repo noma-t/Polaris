@@ -1,6 +1,7 @@
-import { VSUI_GROUPS } from "../data/vsuiGroups";
+import { ExternalLinkIcon } from "../components/icons";
+import { VSUI_GROUPS, type VsuiGroup } from "../data/vsuiGroups";
 
-export function RecommendScreen({ onOpenGroupPage }: { onOpenGroupPage: (groupName: string) => void }) {
+export function RecommendScreen({ onOpenGroupPage }: { onOpenGroupPage: (group: VsuiGroup) => void }) {
   // 未参加のグループを先に表示する
   const groups = [...VSUI_GROUPS].sort((a, b) => Number(a.joined) - Number(b.joined));
   return (
@@ -16,8 +17,9 @@ export function RecommendScreen({ onOpenGroupPage }: { onOpenGroupPage: (groupNa
               </div>
             </div>
             <div className="recommend-card-description">{group.description}</div>
-            <button className="btn-accent-outline recommend-open-button" onClick={() => onOpenGroupPage(group.name)}>
-              Open Group Page
+            <button className="btn-accent-outline recommend-open-button" onClick={() => onOpenGroupPage(group)}>
+              Open in Browser
+              <ExternalLinkIcon size={16} />
             </button>
           </article>
         ))}

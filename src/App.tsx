@@ -1,3 +1,4 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { OverlayScrollArea } from "./components/OverlayScrollArea";
 import { PolarisLogo } from "./components/PolarisLogo";
@@ -7,6 +8,7 @@ import { Toast } from "./components/Toast";
 import { VisibilityDialog, type VisibilityKind } from "./components/VisibilityDialog";
 import type { Screen } from "./components/navigation";
 import { MOCK_RATE_LIMITED } from "./data/mock";
+import type { VsuiGroup } from "./data/vsuiGroups";
 import { useElementWidth } from "./hooks/useElementWidth";
 import { useGroupInstances } from "./hooks/useGroupInstances";
 import { useSocial } from "./hooks/useSocial";
@@ -103,6 +105,9 @@ export default function App() {
 
   const closeVisibilityDialog = useCallback(() => setVisibilityDialog(null), []);
   const openInVRChat = (label: string) => showToast(`Opened “${label}” in VRChat`);
+  const openGroupPageInBrowser = (group: VsuiGroup) => {
+    openUrl(`https://vrchat.com/home/group/${group.groupId}`).catch(() => showToast(`Failed to open “${group.name}” in browser`, "error"));
+  };
 
   return (
     <div ref={rootRef} className={`app-root ${screen === "login" ? "" : "is-signed-in"}`}>
@@ -149,7 +154,7 @@ export default function App() {
                     />
                   )}
                   {screen === "recommend" && (
-                    <RecommendScreen onOpenGroupPage={(name) => showToast(`Opened “${name}” group page in VRChat`)} />
+                    <RecommendScreen onOpenGroupPage={openGroupPageInBrowser} />
                   )}
                   {screen === "settings" && <SettingsScreen version={APP_VERSION} />}
                   {screen === "info" && <AboutScreen version={APP_VERSION} />}
