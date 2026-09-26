@@ -123,6 +123,14 @@ export const ChevronDownIcon =(p: IconProps) => (
   </StrokeIcon>
 );
 
+export const ErrorIcon = (p: IconProps) => (
+  <StrokeIcon {...p} strokeWidth={2.2}>
+    <circle cx="12" cy="12" r="9" />
+    <line x1="12" y1="7.5" x2="12" y2="13" />
+    <circle cx="12" cy="16.4" r="0.6" />
+  </StrokeIcon>
+);
+
 export const CheckIcon = ({ strokeWidth = 2.6, ...p }: IconProps & { strokeWidth?: number }) => (
   <StrokeIcon {...p} viewBox="0 0 20 20" strokeWidth={strokeWidth}>
     <polyline points="4,10.5 8.5,15 16,5.5" />

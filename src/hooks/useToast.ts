@@ -3,14 +3,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export const TOAST_DURATION_MS = 3200;
 const TOAST_EXIT_MS = 260;
 
+export type ToastVariant = "success" | "error";
+
 export interface ToastState {
   message: string | null;
+  variant: ToastVariant;
   visible: boolean;
   shownAt: number;
 }
 
 export function useToast() {
-  const [toast, setToast] = useState<ToastState>({ message: null, visible: false, shownAt: 0 });
+  const [toast, setToast] = useState<ToastState>({ message: null, variant: "success", visible: false, shownAt: 0 });
   const hideTimer = useRef<number>(undefined);
   const removeTimer = useRef<number>(undefined);
   const enterFrame = useRef<number>(undefined);
@@ -28,9 +31,9 @@ export function useToast() {
   }, []);
 
   const showToast = useCallback(
-    (message: string) => {
+    (message: string, variant: ToastVariant = "success") => {
       clearTimers();
-      setToast({ message, visible: false, shownAt: Date.now() });
+      setToast({ message, variant, visible: false, shownAt: Date.now() });
       // 初期位置を描画してから visible にし、enter transition を発火させる
       enterFrame.current = requestAnimationFrame(() => {
         enterFrame.current = requestAnimationFrame(() => setToast((t) => ({ ...t, visible: true })));

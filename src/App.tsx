@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { OverlayScrollArea } from "./components/OverlayScrollArea";
+import { PolarisLogo } from "./components/PolarisLogo";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/Toast";
@@ -9,6 +10,7 @@ import { INITIAL_PINNED_FRIENDS, MOCK_RATE_LIMITED } from "./data/mock";
 import { useElementWidth } from "./hooks/useElementWidth";
 import { useGroupInstances } from "./hooks/useGroupInstances";
 import { useToast } from "./hooks/useToast";
+import { logout, restoreSession, type CurrentUser } from "./lib/auth";
 import { formatClock } from "./lib/format";
 import { AboutScreen } from "./screens/AboutScreen";
 import { InstancesScreen, MIN_GROUPS_WIDTH } from "./screens/InstancesScreen";
@@ -29,6 +31,8 @@ export default function App() {
   const layoutWidth = useElementWidth(rootRef, 1280);
 
   const [screen, setScreen] = useState<Screen>("login");
+  /** 起動時に保存済みセッションを確認している間は true */
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
   const [username, setUsername] = useState("");
   const [pinnedFriendIds, setPinnedFriendIds] = useState(INITIAL_PINNED_FRIENDS);
   const [hiddenGroupIds, setHiddenGroupIds] = useState<Record<string, boolean>>({});
@@ -36,7 +40,34 @@ export default function App() {
   const groupState = useGroupInstances({ rateLimited: MOCK_RATE_LIMITED });
   const { toast, showToast, hideToast } = useToast();
 
-  const signOut = () => {
+  const completeSignIn = (user: CurrentUser) => {
+    setUsername(user.displayName);
+    setScreen("instances");
+  };
+
+  useEffect(() => {
+    let isCancelled = false;
+    restoreSession()
+      .then((user) => {
+        if (user && !isCancelled) completeSignIn(user);
+      })
+      .catch(() => {
+        // 復元に失敗した場合 (オフライン等) はログイン画面から始める
+      })
+      .finally(() => {
+        if (!isCancelled) setIsRestoringSession(false);
+      });
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  const signOut = async () => {
+    try {
+      await logout();
+    } catch {
+      showToast("Failed to clear the saved session", "error");
+    }
     groupState.reset();
     setScreen("login");
   };
@@ -51,13 +82,12 @@ export default function App() {
 
   return (
     <div ref={rootRef} className={`app-root ${screen === "login" ? "" : "is-signed-in"}`}>
-      {screen === "login" ? (
-        <LoginScreen
-          onSignedIn={(name) => {
-            setUsername(name);
-            setScreen("instances");
-          }}
-        />
+      {isRestoringSession ? (
+        <div className="app-splash" aria-busy="true" aria-label="Restoring session">
+          <PolarisLogo className="app-splash-logo" />
+        </div>
+      ) : screen === "login" ? (
+        <LoginScreen onSignedIn={completeSignIn} onError={(message) => showToast(message, "error")} />
       ) : (
         <div className="app-shell">
           <div className="app-body">

@@ -202,6 +202,19 @@ a:hover {
   flex-direction: column;
 }
 
+/* 起動時のセッション復元中に表示する */
+.app-splash {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.app-splash-logo {
+  width: 64px;
+  height: 56px;
+  opacity: 0.8;
+}
+
 /* ===== Overlay scrollbar ===== */
 .overlay-scroll-area {
   position: relative;
@@ -305,6 +318,11 @@ a:hover {
   font-size: 24px;
   font-weight: 700;
   line-height: 1.3;
+}
+.login-2fa-hint {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-text-muted);
 }
 .login-form {
   display: flex;
@@ -1432,6 +1450,16 @@ a:hover {
   opacity: 1;
   transform: translateY(0);
 }
+.toast-icon {
+  color: var(--color-accent);
+}
 .toast-progress {
   transition: width 100ms linear;
+}
+/* エラー時はアイコンと残り時間バーを赤にする */
+.toast.is-error .toast-icon {
+  color: var(--color-danger);
+}
+.toast.is-error .toast-progress {
+  background: var(--color-danger);
 }
