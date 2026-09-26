@@ -787,6 +787,7 @@ a:hover {
   border-color: transparent;
 }
 .panel-expand-button {
+  flex: 1;
   align-self: stretch;
   min-height: 92px;
   margin: 0;
