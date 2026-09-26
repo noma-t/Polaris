@@ -1,9 +1,17 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 export interface CurrentUser {
   id: string;
   displayName: string;
+  /** 表示用アイコンの元 URL (VRChat 側)。未設定なら null */
+  iconUrl: string | null;
 }
+
+/** Rust 側 image_protocol の scheme 名 */
+const VRCHAT_IMAGE_SCHEME = "vrcimg";
+
+/** VRChat の画像 URL を、認証付きで代理取得するカスタム URI scheme の URL に変換する */
+export const toVrchatImageSrc = (url: string) => convertFileSrc(url, VRCHAT_IMAGE_SCHEME);
 
 export type TwoFactorMethod = "totp" | "emailOtp";
 

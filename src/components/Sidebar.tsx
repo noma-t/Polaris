@@ -1,4 +1,5 @@
 import { useState, type MouseEvent } from "react";
+import { toVrchatImageSrc } from "../lib/auth";
 import { PolarisLogo } from "./PolarisLogo";
 import { SidebarToggleIcon, SignOutIcon } from "./icons";
 import { NAV_ITEMS, type NavScreen } from "./navigation";
@@ -6,17 +7,22 @@ import { NAV_ITEMS, type NavScreen } from "./navigation";
 interface SidebarProps {
   activeScreen: NavScreen | null;
   username: string;
+  /** VRChat 側のアイコン URL。null ならプレースホルダーを表示する */
+  userIconUrl: string | null;
   /** false の間は幅不足のため rail (折りたたみ) 表示に固定し、展開操作も無効にする */
   canExpand: boolean;
   onNavigate: (screen: NavScreen) => void;
   onSignOut: () => void;
 }
 
-export function Sidebar({ activeScreen, username, canExpand, onNavigate, onSignOut }: SidebarProps) {
+export function Sidebar({ activeScreen, username, userIconUrl, canExpand, onNavigate, onSignOut }: SidebarProps) {
   const [isOpenPreferred, setIsOpenPreferred] = useState(true);
   const isOpen = isOpenPreferred && canExpand;
   const isExpandable = canExpand && !isOpen;
   const [userMenuPos, setUserMenuPos] = useState<{ left: number; bottom: number } | null>(null);
+  /** 読み込みに失敗したアイコン URL。一致する間はプレースホルダーに戻す */
+  const [failedIconUrl, setFailedIconUrl] = useState<string | null>(null);
+  const isUserIconVisible = userIconUrl !== null && userIconUrl !== failedIconUrl;
 
   const toggleUserMenu = (e: MouseEvent<HTMLButtonElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -77,7 +83,17 @@ export function Sidebar({ activeScreen, username, canExpand, onNavigate, onSignO
             title={username}
             aria-expanded={!!userMenuPos}
           >
-            <span className="sidebar-user-avatar" />
+            <span className="sidebar-user-avatar">
+              {isUserIconVisible && (
+                <img
+                  className="sidebar-user-avatar-image"
+                  src={toVrchatImageSrc(userIconUrl)}
+                  alt=""
+                  draggable={false}
+                  onError={() => setFailedIconUrl(userIconUrl)}
+                />
+              )}
+            </span>
             <span className="sidebar-label sidebar-username">{username}</span>
           </button>
         </div>

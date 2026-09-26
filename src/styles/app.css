@@ -649,7 +649,13 @@ a:hover {
   height: 32px;
   border-radius: 50%;
   background: oklch(0.26 0.008 250);
-  border: 1px solid oklch(0.36 0.008 250);
+  overflow: hidden;
+}
+.sidebar-user-avatar-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .sidebar-username {
   font-family: var(--font-name);

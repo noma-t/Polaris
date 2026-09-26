@@ -17,7 +17,7 @@ impl AuthState {
     }
 
     /// reqwest::Client は内部が Arc なので clone して await 中にロックを持たない
-    fn client(&self) -> VrchatClient {
+    pub fn client(&self) -> VrchatClient {
         self.0.lock().expect("auth state poisoned").clone()
     }
 

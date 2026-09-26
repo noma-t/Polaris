@@ -59,10 +59,47 @@ impl From<reqwest::Error> for AuthError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", from = "ApiCurrentUser")]
 pub struct CurrentUser {
     pub id: String,
     pub display_name: String,
+    /// 表示用アイコンの元 URL。未設定なら None
+    pub icon_url: Option<String>,
+}
+
+/// `GET /auth/user` のレスポンスのうち必要なフィールド。未設定の画像は空文字列で返る
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiCurrentUser {
+    id: String,
+    display_name: String,
+    #[serde(default)]
+    user_icon: String,
+    #[serde(default)]
+    profile_pic_override_thumbnail: String,
+    #[serde(default)]
+    profile_pic_override: String,
+    #[serde(default)]
+    current_avatar_thumbnail_image_url: String,
+}
+
+impl From<ApiCurrentUser> for CurrentUser {
+    /// VRChat クライアントと同じく userIcon → profilePicOverride → アバターサムネイルの順で採用する
+    fn from(user: ApiCurrentUser) -> Self {
+        let icon_url = [
+            user.user_icon,
+            user.profile_pic_override_thumbnail,
+            user.profile_pic_override,
+            user.current_avatar_thumbnail_image_url,
+        ]
+        .into_iter()
+        .find(|url| !url.is_empty());
+        Self {
+            id: user.id,
+            display_name: user.display_name,
+            icon_url,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,6 +193,34 @@ impl VrchatClient {
             }
             status => Err(AuthError::Unexpected(format!("Unexpected response from VRChat ({status})."))),
         }
+    }
+
+    /// VRChat 配下の画像を auth cookie 付きで取得し、`(Content-Type, 本体)` を返す。
+    /// cookie 付きリクエストを任意の URL に送らないよう、VRChat のホスト以外は拒否する
+    pub async fn fetch_image(&self, url: &str) -> Result<(Option<String>, Vec<u8>), AuthError> {
+        let url = Url::parse(url).map_err(|err| AuthError::Unexpected(format!("Invalid image URL: {err}")))?;
+        let is_vrchat_host = url
+            .host_str()
+            .is_some_and(|host| ["vrchat.cloud", "vrchat.com"].iter().any(|d| host == *d || host.ends_with(&format!(".{d}"))));
+        if url.scheme() != "https" || !is_vrchat_host {
+            return Err(AuthError::Unexpected(format!("Refused to fetch non-VRChat image: {url}")));
+        }
+
+        let response = self.http.get(url).send().await?;
+        match response.status() {
+            StatusCode::TOO_MANY_REQUESTS => return Err(AuthError::RateLimited),
+            status if !status.is_success() => {
+                return Err(AuthError::Unexpected(format!("Unexpected response from VRChat ({status}).")))
+            }
+            _ => {}
+        }
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let body = response.bytes().await?.to_vec();
+        Ok((content_type, body))
     }
 
     pub async fn logout(&self) -> Result<(), AuthError> {

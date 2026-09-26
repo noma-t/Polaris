@@ -33,7 +33,7 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>("login");
   /** 起動時に保存済みセッションを確認している間は true */
   const [isRestoringSession, setIsRestoringSession] = useState(true);
-  const [username, setUsername] = useState("");
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [pinnedFriendIds, setPinnedFriendIds] = useState(INITIAL_PINNED_FRIENDS);
   const [hiddenGroupIds, setHiddenGroupIds] = useState<Record<string, boolean>>({});
   const [visibilityDialog, setVisibilityDialog] = useState<VisibilityKind | null>(null);
@@ -41,7 +41,7 @@ export default function App() {
   const { toast, showToast, hideToast } = useToast();
 
   const completeSignIn = (user: CurrentUser) => {
-    setUsername(user.displayName);
+    setCurrentUser(user);
     setScreen("instances");
   };
 
@@ -69,6 +69,7 @@ export default function App() {
       showToast("Failed to clear the saved session", "error");
     }
     groupState.reset();
+    setCurrentUser(null);
     setScreen("login");
   };
 
@@ -93,7 +94,8 @@ export default function App() {
           <div className="app-body">
             <Sidebar
               activeScreen={screen}
-              username={username}
+              username={currentUser?.displayName ?? ""}
+              userIconUrl={currentUser?.iconUrl ?? null}
               canExpand={layoutWidth >= SIDEBAR_EXPANDABLE_MIN_WIDTH}
               onNavigate={navigate}
               onSignOut={signOut}
