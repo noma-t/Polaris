@@ -109,7 +109,7 @@ export function GroupsPanel({
                     {instancesByGroup && <span className={`group-instance-count ${count ? "" : "is-zero"}`}>{count}</span>}
                   </button>
                   {isOpen && (
-                    <button className="group-refresh-button" onClick={refreshGroup} disabled={isCooling}>
+                    <button className="group-refresh-button" onClick={() => refreshGroup(group.id)} disabled={isCooling}>
                       <span>Refresh</span>
                       <span
                         className="cooldown-progress"

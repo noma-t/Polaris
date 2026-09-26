@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { describeAuthError, isAuthError } from "../lib/auth";
-import { getGroupInstances, type GroupInstance } from "../lib/social";
+import { getGroupInstances, getInstancesOfGroup, type GroupInstance } from "../lib/social";
 
 export type SortKey = "users" | "created";
 export interface SortState {
@@ -10,7 +10,7 @@ export interface SortState {
 }
 
 /** 手動更新の全体共通クールダウン (秒) */
-export const REFRESH_COOLDOWN_SEC = 5;
+export const REFRESH_COOLDOWN_SEC = 3;
 const AUTO_REFRESH_BASE_MS = 60_000;
 const AUTO_REFRESH_JITTER_MS = 15_000;
 
@@ -48,20 +48,28 @@ export function useGroupInstances({ isSignedIn, hasOpenGroup, onError }: UseGrou
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
-  const fetchInstances = useCallback(async (shouldReportError: boolean) => {
+  /** `groupId` を指定するとそのグループだけ取得して差し替える。省略時は全グループ分を取得する */
+  const fetchInstances = useCallback(async (shouldReportError: boolean, groupId?: string) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     const session = sessionRef.current;
     setIsLoading(true);
     try {
-      const instances = await getGroupInstances();
-      if (session !== sessionRef.current) return;
-      setInstancesByGroup(groupByGroupId(instances));
-      setHasLoadFailed(false);
+      if (groupId === undefined) {
+        const instances = await getGroupInstances();
+        if (session !== sessionRef.current) return;
+        setInstancesByGroup(groupByGroupId(instances));
+        setHasLoadFailed(false);
+      } else {
+        const instances = await getInstancesOfGroup(groupId);
+        if (session !== sessionRef.current) return;
+        setInstancesByGroup((prev) => prev && { ...prev, [groupId]: instances });
+      }
       setUpdatedAt(Date.now());
     } catch (error) {
       if (session !== sessionRef.current) return;
-      setHasLoadFailed(true);
+      // 1 グループの取得失敗では取得済みの表示を残す
+      if (groupId === undefined) setHasLoadFailed(true);
       // unauthorized は useSocial の session-expired 通知でサインアウトさせる
       const isUnauthorized = isAuthError(error) && error.kind === "unauthorized";
       if (shouldReportError && !isUnauthorized) onErrorRef.current(describeAuthError(error));
@@ -69,7 +77,10 @@ export function useGroupInstances({ isSignedIn, hasOpenGroup, onError }: UseGrou
       if (session === sessionRef.current) {
         isFetchingRef.current = false;
         setIsLoading(false);
-        nextAutoRef.current = Date.now() + AUTO_REFRESH_BASE_MS + Math.random() * AUTO_REFRESH_JITTER_MS;
+        // 1 グループの取得ではほかのグループが古いままなので、自動更新の予定は延ばさない
+        if (groupId === undefined) {
+          nextAutoRef.current = Date.now() + AUTO_REFRESH_BASE_MS + Math.random() * AUTO_REFRESH_JITTER_MS;
+        }
       }
     }
   }, []);
@@ -89,10 +100,14 @@ export function useGroupInstances({ isSignedIn, hasOpenGroup, onError }: UseGrou
     return () => clearInterval(id);
   }, [isSignedIn, hasOpenGroup, fetchInstances]);
 
-  const refreshGroup = useCallback(() => {
-    setCooldownUntil(Date.now() + REFRESH_COOLDOWN_SEC * 1000);
-    void fetchInstances(true);
-  }, [fetchInstances]);
+  /** 押されたグループだけ再取得する。全グループ分が未取得なら全体取得にフォールバックする */
+  const refreshGroup = useCallback(
+    (groupId: string) => {
+      setCooldownUntil(Date.now() + REFRESH_COOLDOWN_SEC * 1000);
+      void fetchInstances(true, instancesByGroup === null ? undefined : groupId);
+    },
+    [fetchInstances, instancesByGroup],
+  );
 
   /** 同じキーなら方向を反転、別キーならキーだけ切り替える */
   const selectSort = useCallback((key: SortKey) => {

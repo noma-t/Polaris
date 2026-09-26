@@ -50,6 +50,7 @@ pub fn run() {
             social_commands::social_get_friends,
             social_commands::social_get_groups,
             social_commands::social_get_group_instances,
+            social_commands::social_get_instances_of_group,
             social_commands::social_set_pinned_friends,
             settings_store::settings_load_app,
             settings_store::settings_save_app,
