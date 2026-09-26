@@ -19,7 +19,7 @@ export type LoginResult =
   | { kind: "signedIn"; user: CurrentUser }
   | { kind: "requiresTwoFactor"; methods: TwoFactorMethod[] };
 
-export type AuthErrorKind = "invalidCredentials" | "invalidCode" | "rateLimited" | "network" | "unexpected";
+export type AuthErrorKind = "invalidCredentials" | "invalidCode" | "unauthorized" | "rateLimited" | "network" | "unexpected";
 
 /** Rust 側 AuthError のシリアライズ形式 */
 export interface AuthError {

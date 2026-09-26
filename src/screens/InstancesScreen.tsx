@@ -4,6 +4,7 @@ import { GroupsPanel } from "../components/GroupsPanel";
 import { FriendIcon, GroupsIcon } from "../components/icons";
 import { useElementWidth } from "../hooks/useElementWidth";
 import type { GroupInstancesState } from "../hooks/useGroupInstances";
+import type { Friend, Group } from "../lib/social";
 
 export const MIN_GROUPS_WIDTH = 410;
 const MIN_FRIENDS_WIDTH = 240;
@@ -16,6 +17,8 @@ const DEFAULT_GROUPS_SHARE = 58;
 const TWO_COLUMN_MIN_WIDTH = MIN_GROUPS_WIDTH + SPLIT_HANDLE_WIDTH + MIN_FRIENDS_WIDTH;
 
 interface InstancesScreenProps {
+  friends: Friend[];
+  groups: Group[];
   groupState: GroupInstancesState;
   pinnedFriendIds: Record<string, boolean>;
   hiddenGroupIds: Record<string, boolean>;
@@ -25,6 +28,8 @@ interface InstancesScreenProps {
 }
 
 export function InstancesScreen({
+  friends,
+  groups,
   groupState,
   pinnedFriendIds,
   hiddenGroupIds,
@@ -116,12 +121,7 @@ export function InstancesScreen({
               <GroupsIcon size={26} className="panel-title-icon" />
             </button>
           ) : (
-            <GroupsPanel
-              groupState={groupState}
-              hiddenGroupIds={hiddenGroupIds}
-              onOpenInstance={onOpenInstance}
-              onManage={onManageGroups}
-            />
+            <GroupsPanel groups={groups} groupState={groupState} hiddenGroupIds={hiddenGroupIds} onManage={onManageGroups} />
           )}
         </section>
 
@@ -142,7 +142,7 @@ export function InstancesScreen({
               <FriendIcon size={26} className="panel-title-icon" />
             </button>
           ) : (
-            <FriendsPanel pinnedIds={pinnedFriendIds} onOpenInstance={onOpenInstance} onManage={onManageFriends} />
+            <FriendsPanel friends={friends} pinnedIds={pinnedFriendIds} onOpenInstance={onOpenInstance} onManage={onManageFriends} />
           )}
         </section>
       </div>

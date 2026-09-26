@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { MOCK_FRIENDS, MOCK_GROUPS } from "../data/mock";
-import { FRIEND_STATUS_META, friendLocationLabel } from "../lib/friendStatus";
+import { compareFriends, FRIEND_STATUS_META, friendLocationLabel } from "../lib/friendStatus";
+import type { Friend, Group } from "../lib/social";
 import { CheckIcon, CloseIcon } from "./icons";
 
 export type VisibilityKind = "friends" | "groups";
 
 interface VisibilityDialogProps {
   kind: VisibilityKind;
+  friends: Friend[];
+  groups: Group[];
   pinnedFriendIds: Record<string, boolean>;
   hiddenGroupIds: Record<string, boolean>;
   onToggleFriend: (friendId: string) => void;
@@ -25,12 +27,11 @@ interface VisibilityRow {
   onToggle: () => void;
 }
 
-const instanceCountLabel = (count: number) =>
-  count === 0 ? "No instances" : `${count} ${count > 1 ? "instances" : "instance"}`;
-
 /** Instances 画面の Friends / Groups に表示する項目を選ぶ modal dialog */
 export function VisibilityDialog({
   kind,
+  friends,
+  groups,
   pinnedFriendIds,
   hiddenGroupIds,
   onToggleFriend,
@@ -48,14 +49,14 @@ export function VisibilityDialog({
   }, [onClose]);
 
   const allRows: VisibilityRow[] = isGroups
-    ? MOCK_GROUPS.map((g) => ({
+    ? groups.map((g) => ({
         id: g.id,
         name: g.name,
-        status: instanceCountLabel(g.instances.length),
+        status: "",
         isOn: !hiddenGroupIds[g.id],
         onToggle: () => onToggleGroup(g.id),
       }))
-    : MOCK_FRIENDS.map((f) => ({
+    : [...friends].sort(compareFriends).map((f) => ({
         id: f.id,
         name: f.name,
         status: friendLocationLabel(f),
@@ -104,10 +105,12 @@ export function VisibilityDialog({
               </span>
               <span className="visibility-row-info">
                 <span className="visibility-row-name">{row.name}</span>
-                <span className="visibility-row-status">
-                  {row.dotColor && <span className="status-dot is-small" style={{ background: row.dotColor }} />}
-                  <span className="visibility-row-status-text">{row.status}</span>
-                </span>
+                {(row.dotColor || row.status) && (
+                  <span className="visibility-row-status">
+                    {row.dotColor && <span className="status-dot is-small" style={{ background: row.dotColor }} />}
+                    <span className="visibility-row-status-text">{row.status}</span>
+                  </span>
+                )}
               </span>
             </button>
           ))}

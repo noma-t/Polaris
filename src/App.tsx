@@ -6,9 +6,10 @@ import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/Toast";
 import { VisibilityDialog, type VisibilityKind } from "./components/VisibilityDialog";
 import type { Screen } from "./components/navigation";
-import { INITIAL_PINNED_FRIENDS, MOCK_RATE_LIMITED } from "./data/mock";
+import { MOCK_RATE_LIMITED } from "./data/mock";
 import { useElementWidth } from "./hooks/useElementWidth";
 import { useGroupInstances } from "./hooks/useGroupInstances";
+import { useSocial } from "./hooks/useSocial";
 import { useToast } from "./hooks/useToast";
 import { logout, restoreSession, type CurrentUser } from "./lib/auth";
 import { formatClock } from "./lib/format";
@@ -34,11 +35,19 @@ export default function App() {
   /** 起動時に保存済みセッションを確認している間は true */
   const [isRestoringSession, setIsRestoringSession] = useState(true);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
-  const [pinnedFriendIds, setPinnedFriendIds] = useState(INITIAL_PINNED_FRIENDS);
+  const [pinnedFriendIds, setPinnedFriendIds] = useState<Record<string, boolean>>({});
   const [hiddenGroupIds, setHiddenGroupIds] = useState<Record<string, boolean>>({});
   const [visibilityDialog, setVisibilityDialog] = useState<VisibilityKind | null>(null);
-  const groupState = useGroupInstances({ rateLimited: MOCK_RATE_LIMITED });
+  const groupState = useGroupInstances();
   const { toast, showToast, hideToast } = useToast();
+  const { friends, groups, updatedAt } = useSocial({
+    isSignedIn: currentUser !== null,
+    pinnedFriendIds,
+    onSessionExpired: () => {
+      showToast("Session expired. Please sign in again.", "error");
+      void signOut();
+    },
+  });
 
   const completeSignIn = (user: CurrentUser) => {
     setCurrentUser(user);
@@ -69,6 +78,9 @@ export default function App() {
       showToast("Failed to clear the saved session", "error");
     }
     groupState.reset();
+    setPinnedFriendIds({});
+    setHiddenGroupIds({});
+    setVisibilityDialog(null);
     setCurrentUser(null);
     setScreen("login");
   };
@@ -113,6 +125,8 @@ export default function App() {
 
                   {screen === "instances" && (
                     <InstancesScreen
+                      friends={friends}
+                      groups={groups}
                       groupState={groupState}
                       pinnedFriendIds={pinnedFriendIds}
                       hiddenGroupIds={hiddenGroupIds}
@@ -130,13 +144,15 @@ export default function App() {
               </OverlayScrollArea>
             </main>
           </div>
-          <StatusBar updatedAt={groupState.updatedAt} />
+          <StatusBar updatedAt={updatedAt} />
         </div>
       )}
 
       {screen === "instances" && visibilityDialog && (
         <VisibilityDialog
           kind={visibilityDialog}
+          friends={friends}
+          groups={groups}
           pinnedFriendIds={pinnedFriendIds}
           hiddenGroupIds={hiddenGroupIds}
           onToggleFriend={(id) => setPinnedFriendIds((s) => ({ ...s, [id]: !s[id] }))}

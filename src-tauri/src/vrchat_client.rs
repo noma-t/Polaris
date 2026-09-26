@@ -11,9 +11,14 @@ use reqwest::{
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
+use crate::vrchat_models::{ApiFriend, ApiUserGroup, ApiWorld};
+
 const API_BASE: &str = "https://api.vrchat.cloud/api/1";
 /// VRChat API は識別可能な User-Agent を必須としている
-const USER_AGENT: &str = concat!("Polaris/", env!("CARGO_PKG_VERSION"), " noma-t");
+pub const USER_AGENT: &str = concat!("Polaris/", env!("CARGO_PKG_VERSION"), " noma-t");
+
+/// `GET /auth/user/friends` の 1 ページあたりの最大件数
+pub const FRIENDS_PAGE_SIZE: usize = 100;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
@@ -21,6 +26,8 @@ pub enum AuthError {
     InvalidCredentials,
     #[error("Invalid verification code.")]
     InvalidCode,
+    #[error("Session expired. Please sign in again.")]
+    Unauthorized,
     #[error("Rate limited by VRChat. Please wait and try again.")]
     RateLimited,
     #[error("Could not reach VRChat: {0}")]
@@ -34,6 +41,7 @@ impl AuthError {
         match self {
             Self::InvalidCredentials => "invalidCredentials",
             Self::InvalidCode => "invalidCode",
+            Self::Unauthorized => "unauthorized",
             Self::RateLimited => "rateLimited",
             Self::Network(_) => "network",
             Self::Unexpected(_) => "unexpected",
@@ -223,6 +231,45 @@ impl VrchatClient {
         Ok((content_type, body))
     }
 
+    /// 1 ページ分 (最大 100 件) の friend を取得する。`offline` で online / offline のどちらかを選ぶ
+    pub async fn get_friends(&self, offline: bool, offset: usize) -> Result<Vec<ApiFriend>, AuthError> {
+        let mut url = Self::api_url("/auth/user/friends");
+        url.query_pairs_mut()
+            .append_pair("offline", if offline { "true" } else { "false" })
+            .append_pair("n", &FRIENDS_PAGE_SIZE.to_string())
+            .append_pair("offset", &offset.to_string());
+        self.get_json(url).await
+    }
+
+    pub async fn get_world(&self, world_id: &str) -> Result<ApiWorld, AuthError> {
+        self.get_json(Self::api_url(&format!("/worlds/{}", urlencoding::encode(world_id)))).await
+    }
+
+    pub async fn get_user_groups(&self, user_id: &str) -> Result<Vec<ApiUserGroup>, AuthError> {
+        self.get_json(Self::api_url(&format!("/users/{}/groups", urlencoding::encode(user_id)))).await
+    }
+
+    async fn get_json<T: serde::de::DeserializeOwned>(&self, url: Url) -> Result<T, AuthError> {
+        let response = self.http.get(url).send().await?;
+        match response.status() {
+            StatusCode::UNAUTHORIZED => return Err(AuthError::Unauthorized),
+            StatusCode::TOO_MANY_REQUESTS => return Err(AuthError::RateLimited),
+            status if !status.is_success() => {
+                return Err(AuthError::Unexpected(format!("Unexpected response from VRChat ({status}).")))
+            }
+            _ => {}
+        }
+        response
+            .json()
+            .await
+            .map_err(|err| AuthError::Unexpected(format!("Failed to parse VRChat response: {err}")))
+    }
+
+    /// pipeline (WebSocket) 接続用に `auth` cookie の値を取り出す
+    pub fn auth_token(&self) -> Option<String> {
+        self.export_cookies().as_deref().and_then(extract_auth_token)
+    }
+
     pub async fn logout(&self) -> Result<(), AuthError> {
         self.http.put(Self::api_url("/logout")).send().await?;
         Ok(())
@@ -265,5 +312,31 @@ impl VrchatClient {
         serde_json::from_value(body)
             .map(AuthUserResponse::SignedIn)
             .map_err(|err| AuthError::Unexpected(format!("Failed to parse user: {err}")))
+    }
+}
+
+/// `name=value; name=value` 形式の cookie 文字列から `auth` の値を取り出す
+fn extract_auth_token(cookies: &str) -> Option<String> {
+    cookies
+        .split(';')
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find(|(name, value)| *name == "auth" && !value.is_empty())
+        .map(|(_, value)| value.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_auth_token;
+
+    #[test]
+    fn extracts_auth_token_from_cookie_header() {
+        let cookies = "twoFactorAuth=tfa_value; auth=authcookie_abc123";
+        assert_eq!(extract_auth_token(cookies).as_deref(), Some("authcookie_abc123"));
+    }
+
+    #[test]
+    fn returns_none_without_auth_cookie() {
+        assert_eq!(extract_auth_token("twoFactorAuth=tfa_value"), None);
+        assert_eq!(extract_auth_token("auth="), None);
     }
 }

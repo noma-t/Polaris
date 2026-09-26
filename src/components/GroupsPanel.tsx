@@ -1,12 +1,12 @@
-import { MOCK_GROUPS, type GroupInstance } from "../data/mock";
 import { REFRESH_COOLDOWN_SEC, type GroupInstancesState, type SortKey } from "../hooks/useGroupInstances";
 import { useNow } from "../hooks/useNow";
+import type { Group } from "../lib/social";
 import { ChevronDownIcon, GroupsIcon, VisibilityListIcon } from "./icons";
 
 interface GroupsPanelProps {
+  groups: Group[];
   groupState: GroupInstancesState;
   hiddenGroupIds: Record<string, boolean>;
-  onOpenInstance: (label: string) => void;
   onManage: () => void;
 }
 
@@ -15,22 +15,13 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: "created", label: "Created" },
 ];
 
-export function GroupsPanel({ groupState, hiddenGroupIds, onOpenInstance, onManage }: GroupsPanelProps) {
-  const { openIds, loadingIds, sort, cooldownUntil, toggleGroup, refreshGroup, selectSort } = groupState;
+export function GroupsPanel({ groups, groupState, hiddenGroupIds, onManage }: GroupsPanelProps) {
+  const { openIds, sort, cooldownUntil, toggleGroup, refreshGroup, selectSort } = groupState;
   const isCoolingCandidate = cooldownUntil > Date.now();
   const now = useNow(100, isCoolingCandidate);
   const cooldownMs = Math.min(REFRESH_COOLDOWN_SEC * 1000, Math.max(0, cooldownUntil - now));
   const isCooling = cooldownMs > 0;
-  const shownGroups = MOCK_GROUPS.filter((g) => !hiddenGroupIds[g.id]);
-
-  const compareInstances = (a: GroupInstance, b: GroupInstance) =>
-    sort.key === "users"
-      ? sort.usersDir === "desc"
-        ? b.userCount - a.userCount
-        : a.userCount - b.userCount
-      : sort.createdDir === "new"
-        ? b.createdMinutes - a.createdMinutes
-        : a.createdMinutes - b.createdMinutes;
+  const shownGroups = groups.filter((g) => !hiddenGroupIds[g.id]);
 
   return (
     <>
@@ -68,16 +59,12 @@ export function GroupsPanel({ groupState, hiddenGroupIds, onOpenInstance, onMana
       <div className="group-list">
         {shownGroups.map((group) => {
           const isOpen = !!openIds[group.id];
-          const isLoading = !!loadingIds[group.id];
-          const count = group.instances.length;
-          const rows = isOpen && !isLoading ? group.instances.slice().sort(compareInstances) : [];
           return (
             <div key={group.id} className={`group-card ${isOpen ? "is-open" : ""}`}>
               <div className="group-card-header">
                 <button className="group-toggle" onClick={() => toggleGroup(group.id)} aria-expanded={isOpen}>
                   <span className="group-toggle-chevron">{isOpen ? "▼" : "▶"}</span>
                   <span className="group-name">{group.name}</span>
-                  <span className={`group-instance-count ${count ? "" : "is-zero"}`}>{count}</span>
                 </button>
                 {isOpen && (
                   <button className="group-refresh-button" onClick={refreshGroup} disabled={isCooling}>
@@ -91,27 +78,8 @@ export function GroupsPanel({ groupState, hiddenGroupIds, onOpenInstance, onMana
               </div>
               {isOpen && (
                 <div className="group-instance-list">
-                  {isLoading && <div className="group-list-message">Loading…</div>}
-                  {!isLoading && count === 0 && <div className="group-list-message">No instances</div>}
-                  {rows.map((inst) => (
-                    <div key={inst.id} className="instance-row">
-                      <div className="instance-info">
-                        <div className="instance-primary">
-                          <span className="instance-world">{inst.world}</span>
-                          <span className={`instance-user-count ${inst.userCount >= inst.capacity ? "is-full" : ""}`}>
-                            ({inst.userCount}/{inst.capacity})
-                          </span>
-                        </div>
-                        <div className="instance-secondary">
-                          <span className="instance-access-type">{inst.accessType}</span>
-                          <span className="instance-created">{inst.createdLabel}</span>
-                        </div>
-                      </div>
-                      <button className="btn-accent open-button" onClick={() => onOpenInstance(inst.world)}>
-                        Open
-                      </button>
-                    </div>
-                  ))}
+                  {/* インスタンス取得は未実装 */}
+                  <div className="group-list-message">No instances</div>
                 </div>
               )}
             </div>
