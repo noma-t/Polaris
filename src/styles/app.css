@@ -1429,12 +1429,12 @@ a:hover {
   gap: 3px;
 }
 .settings-row-title {
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 700;
 }
 .settings-row-description,
 .settings-update-status {
-  font-size: 13px;
+  font-size: 15px;
   color: var(--color-text-muted);
 }
 .settings-update-status.is-available {
@@ -1450,7 +1450,7 @@ a:hover {
   flex: none;
   width: 170px;
   min-height: 40px;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--color-text);
   background: var(--color-raised);
@@ -1493,12 +1493,12 @@ a:hover {
   border-bottom: 1px solid var(--color-line-soft);
 }
 .about-row-title {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--color-text-muted);
 }
 .about-row-body {
-  font-size: 12px;
+  font-size: 14px;
   text-wrap: pretty;
 }
 
