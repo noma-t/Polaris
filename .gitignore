@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# Local notes
+07-249837423
