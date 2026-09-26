@@ -969,6 +969,9 @@ a:hover {
 .group-name {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-family: var(--font-name);
   font-size: 16px;
   font-weight: 600;
