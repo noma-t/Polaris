@@ -1,4 +1,4 @@
-//! アプリ共通の設定 (launch.exe のパス) と、ユーザーごとの表示設定
+//! アプリ共通の設定 (launch.exe のパス・Developer 向け設定) と、ユーザーごとの表示設定
 //! (pinned friend・表示する group・折りたたんだ group) を app data dir の `settings.json` に保存する。
 
 use std::collections::HashMap;
@@ -22,11 +22,19 @@ const DEFAULT_LAUNCHER_PATH: &str = "C:/Program Files (x86)/Steam/steamapps/comm
 pub struct AppSettings {
     /// インスタンスを開くのに使う VRChat の launch.exe
     pub launcher_path: String,
+    /// Settings 画面に Developer 向けの設定項目を表示する
+    pub developer_mode: bool,
+    /// 通信せずにダミーの update を表示する (developer_mode が有効な場合のみ効く)
+    pub simulate_update_available: bool,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { launcher_path: DEFAULT_LAUNCHER_PATH.to_owned() }
+        Self {
+            launcher_path: DEFAULT_LAUNCHER_PATH.to_owned(),
+            developer_mode: false,
+            simulate_update_available: false,
+        }
     }
 }
 
