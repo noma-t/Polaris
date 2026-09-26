@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
+import { useRef, useState, type PointerEvent } from "react";
 import { FriendsPanel } from "../components/FriendsPanel";
 import { GroupsPanel } from "../components/GroupsPanel";
 import { FriendIcon, GroupsIcon } from "../components/icons";
@@ -46,37 +46,10 @@ export function InstancesScreen({
   const [groupsShare, setGroupsShare] = useState(DEFAULT_GROUPS_SHARE);
   const [collapsedPanel, setCollapsedPanel] = useState<"groups" | "friends" | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [gripHeight, setGripHeight] = useState<number | null>(null);
 
   const isTwoColumn = gridWidth >= TWO_COLUMN_MIN_WIDTH;
   const isGroupsCollapsed = isTwoColumn && collapsedPanel === "groups";
   const isFriendsCollapsed = isTwoColumn && collapsedPanel === "friends";
-
-  // 分割ハンドルのグリップを、スクロールコンテナ内で見えている範囲の高さに合わせる
-  const measureGrip = useCallback(() => {
-    const grid = gridRef.current;
-    if (!grid) return;
-    let scroller = grid.parentElement;
-    while (scroller && !/auto|scroll/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
-    if (!scroller) return;
-    const gr = grid.getBoundingClientRect();
-    const sr = scroller.getBoundingClientRect();
-    const visible = Math.max(0, Math.round(Math.min(gr.bottom, sr.bottom) - Math.max(gr.top, sr.top)));
-    setGripHeight((h) => (h === visible ? h : visible));
-  }, []);
-
-  useLayoutEffect(measureGrip);
-  useEffect(() => {
-    const grid = gridRef.current;
-    if (!grid) return;
-    const observer = new ResizeObserver(() => requestAnimationFrame(measureGrip));
-    observer.observe(grid);
-    document.addEventListener("scroll", measureGrip, true);
-    return () => {
-      observer.disconnect();
-      document.removeEventListener("scroll", measureGrip, true);
-    };
-  }, [measureGrip]);
 
   const onSplitPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     const grid = gridRef.current;
@@ -143,7 +116,7 @@ export function InstancesScreen({
             onDoubleClick={() => setGroupsShare(DEFAULT_GROUPS_SHARE)}
             title="Drag to resize"
           >
-            <div className="split-grip" style={{ height: gripHeight != null ? Math.max(0, gripHeight - 16) : "calc(100% - 16px)" }} />
+            <div className="split-grip" />
           </div>
         )}
 

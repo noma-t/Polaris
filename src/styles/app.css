@@ -746,24 +746,36 @@ a:hover {
 }
 
 /* ===== Instances ===== */
+/* 2 カラム時は main 全体をスクロールさせず、Groups / Friends の枠を固定して中身だけを個別にスクロールする */
+.main-content:has(> .instances-screen > .instances-grid.is-two-column) {
+  height: 100%;
+}
 .instances-screen {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
 .instances-grid {
   flex: 1;
+  min-height: 0;
   display: grid;
   gap: 12px 0;
   align-items: stretch;
 }
+.instances-grid.is-two-column {
+  grid-template-rows: minmax(0, 1fr);
+}
+.instances-grid.is-two-column .instances-panel {
+  min-height: 0;
+  overflow: hidden;
+}
 .instances-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
   min-width: 0;
-  padding: 0 16px 16px;
+  padding: 0 16px;
   background: var(--color-panel);
   border: 1px solid var(--color-line-soft);
   border-radius: 8px;
@@ -775,8 +787,6 @@ a:hover {
   border-color: transparent;
 }
 .panel-expand-button {
-  position: sticky;
-  top: calc(50% - 46px);
   align-self: stretch;
   min-height: 92px;
   margin: 0;
@@ -808,6 +818,26 @@ a:hover {
 .groups-panel-header {
   flex-wrap: wrap;
   gap: 10px 16px;
+}
+/* scrollbar を panel の右端に寄せるため、panel の左右 padding を打ち消して viewport 側で持ち直す */
+.instances-panel > .overlay-scroll-area {
+  margin: 0 -16px;
+}
+.panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 16px 16px;
+  box-sizing: border-box;
+}
+/* 1 カラム時は従来通り main 全体でスクロールする */
+.instances-grid:not(.is-two-column) .instances-panel > .overlay-scroll-area {
+  flex: none;
+  overflow: visible;
+}
+.instances-grid:not(.is-two-column) .panel-body {
+  height: auto;
+  overflow: visible;
 }
 .panel-header-actions {
   flex: none;
@@ -1053,8 +1083,7 @@ a:hover {
   background: oklch(0.22 0.008 250);
 }
 .split-grip {
-  position: sticky;
-  top: 8px;
+  height: calc(100% - 16px);
   margin: 8px 0;
   width: 3px;
   border-radius: 2px;

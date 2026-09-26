@@ -2,6 +2,7 @@ import { REFRESH_COOLDOWN_SEC, type GroupInstancesState, type SortKey } from "..
 import { useNow } from "../hooks/useNow";
 import type { Group } from "../lib/social";
 import { ChevronDownIcon, GroupsIcon, VisibilityListIcon } from "./icons";
+import { OverlayScrollArea } from "./OverlayScrollArea";
 
 interface GroupsPanelProps {
   groups: Group[];
@@ -63,38 +64,40 @@ export function GroupsPanel({
         </div>
       </div>
 
-      {shownGroups.length === 0 && <div className="panel-empty">No groups shown</div>}
+      <OverlayScrollArea viewportClassName="panel-body">
+        {shownGroups.length === 0 && <div className="panel-empty">No groups shown</div>}
 
-      <div className="group-list">
-        {shownGroups.map((group) => {
-          const isOpen = !collapsedGroupIds[group.id];
-          return (
-            <div key={group.id} className={`group-card ${isOpen ? "is-open" : ""}`}>
-              <div className="group-card-header">
-                <button className="group-toggle" onClick={() => onToggleCollapsed(group.id)} aria-expanded={isOpen}>
-                  <span className="group-toggle-chevron">{isOpen ? "▼" : "▶"}</span>
-                  <span className="group-name">{group.name}</span>
-                </button>
-                {isOpen && (
-                  <button className="group-refresh-button" onClick={refreshGroup} disabled={isCooling}>
-                    <span>Refresh</span>
-                    <span
-                      className="cooldown-progress"
-                      style={{ width: `${(cooldownMs / (REFRESH_COOLDOWN_SEC * 1000)) * 100}%` }}
-                    />
+        <div className="group-list">
+          {shownGroups.map((group) => {
+            const isOpen = !collapsedGroupIds[group.id];
+            return (
+              <div key={group.id} className={`group-card ${isOpen ? "is-open" : ""}`}>
+                <div className="group-card-header">
+                  <button className="group-toggle" onClick={() => onToggleCollapsed(group.id)} aria-expanded={isOpen}>
+                    <span className="group-toggle-chevron">{isOpen ? "▼" : "▶"}</span>
+                    <span className="group-name">{group.name}</span>
                   </button>
+                  {isOpen && (
+                    <button className="group-refresh-button" onClick={refreshGroup} disabled={isCooling}>
+                      <span>Refresh</span>
+                      <span
+                        className="cooldown-progress"
+                        style={{ width: `${(cooldownMs / (REFRESH_COOLDOWN_SEC * 1000)) * 100}%` }}
+                      />
+                    </button>
+                  )}
+                </div>
+                {isOpen && (
+                  <div className="group-instance-list">
+                    {/* インスタンス取得は未実装 */}
+                    <div className="group-list-message">No instances</div>
+                  </div>
                 )}
               </div>
-              {isOpen && (
-                <div className="group-instance-list">
-                  {/* インスタンス取得は未実装 */}
-                  <div className="group-list-message">No instances</div>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      </OverlayScrollArea>
     </>
   );
 }

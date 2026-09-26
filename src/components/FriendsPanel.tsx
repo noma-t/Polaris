@@ -1,6 +1,7 @@
 import { canOpenFriendLocation, compareFriends, FRIEND_STATUS_META, friendLocationLabel } from "../lib/friendStatus";
 import type { Friend } from "../lib/social";
 import { FriendIcon, VisibilityListIcon } from "./icons";
+import { OverlayScrollArea } from "./OverlayScrollArea";
 
 interface FriendsPanelProps {
   friends: Friend[];
@@ -24,39 +25,41 @@ export function FriendsPanel({ friends, pinnedIds, onOpenInstance, onManage }: F
         </button>
       </div>
 
-      {pinned.length === 0 && <div className="panel-empty">No pinned friends</div>}
+      <OverlayScrollArea viewportClassName="panel-body">
+        {pinned.length === 0 && <div className="panel-empty">No pinned friends</div>}
 
-      <div className="friend-list">
-        {pinned.map((friend) => {
-          const canOpen = canOpenFriendLocation(friend);
-          return (
-            <div key={friend.id} className={`friend-row ${friend.locationKind === "offline" ? "is-offline" : ""}`}>
-              <div className="friend-info">
-                <span className="friend-name-line">
-                  <span className="status-dot" style={{ background: FRIEND_STATUS_META[friend.status].color }} />
-                  <span className="friend-name">{friend.name}</span>
-                </span>
-                {friend.isWorldLoading ? (
-                  <span className="friend-location" aria-busy="true" aria-label="Loading world name">
-                    <span className="friend-world is-loading" />
+        <div className="friend-list">
+          {pinned.map((friend) => {
+            const canOpen = canOpenFriendLocation(friend);
+            return (
+              <div key={friend.id} className={`friend-row ${friend.locationKind === "offline" ? "is-offline" : ""}`}>
+                <div className="friend-info">
+                  <span className="friend-name-line">
+                    <span className="status-dot" style={{ background: FRIEND_STATUS_META[friend.status].color }} />
+                    <span className="friend-name">{friend.name}</span>
                   </span>
-                ) : canOpen ? (
-                  <span className="friend-location">
-                    <span className="friend-world">{friend.worldName}</span>
-                  </span>
-                ) : (
-                  <span className="friend-location-hidden">{friendLocationLabel(friend)}</span>
+                  {friend.isWorldLoading ? (
+                    <span className="friend-location" aria-busy="true" aria-label="Loading world name">
+                      <span className="friend-world is-loading" />
+                    </span>
+                  ) : canOpen ? (
+                    <span className="friend-location">
+                      <span className="friend-world">{friend.worldName}</span>
+                    </span>
+                  ) : (
+                    <span className="friend-location-hidden">{friendLocationLabel(friend)}</span>
+                  )}
+                </div>
+                {canOpen && (
+                  <button className="btn-accent open-button" onClick={() => onOpenInstance(friend.worldName ?? friend.name)}>
+                    Open
+                  </button>
                 )}
               </div>
-              {canOpen && (
-                <button className="btn-accent open-button" onClick={() => onOpenInstance(friend.worldName ?? friend.name)}>
-                  Open
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      </OverlayScrollArea>
     </>
   );
 }
