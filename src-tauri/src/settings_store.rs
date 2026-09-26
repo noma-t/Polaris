@@ -1,5 +1,5 @@
-//! ユーザーごとの表示設定 (pinned friend・表示する group・折りたたんだ group) を
-//! app data dir の `settings.json` に保存する。
+//! アプリ共通の設定 (launch.exe のパス) と、ユーザーごとの表示設定
+//! (pinned friend・表示する group・折りたたんだ group) を app data dir の `settings.json` に保存する。
 
 use std::collections::HashMap;
 use std::fs;
@@ -9,9 +9,26 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
+use crate::game_monitor::GameState;
 use crate::vrchat_client::AuthError;
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
+/// Steam 版 VRChat を既定の場所にインストールした場合の launch.exe
+const DEFAULT_LAUNCHER_PATH: &str = "C:/Program Files (x86)/Steam/steamapps/common/VRChat/launch.exe";
+
+/// VRChat アカウントに依らない、PC 単位の設定
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AppSettings {
+    /// インスタンスを開くのに使う VRChat の launch.exe
+    pub launcher_path: String,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self { launcher_path: DEFAULT_LAUNCHER_PATH.to_owned() }
+    }
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -25,6 +42,7 @@ pub struct UserSettings {
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct SettingsFile {
+    app: AppSettings,
     /// VRChat の userId ごとの設定
     users: HashMap<String, UserSettings>,
 }
@@ -64,6 +82,38 @@ fn write_file(path: &PathBuf, file: &SettingsFile) -> Result<(), AuthError> {
     let temp_path = path.with_extension("json.tmp");
     fs::write(&temp_path, text).map_err(to_error)?;
     fs::rename(&temp_path, path).map_err(to_error)
+}
+
+/// 起動時に保存済みの launch.exe パスを読み込む
+pub fn load_app_settings(app: &AppHandle) -> AppSettings {
+    let state = app.state::<SettingsState>();
+    let _guard = state.0.lock().expect("settings lock poisoned");
+    settings_path(app).map(|path| read_file(&path).app).unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn settings_load_app(app: AppHandle, state: State<'_, SettingsState>) -> Result<AppSettings, AuthError> {
+    let _guard = state.0.lock().expect("settings lock poisoned");
+    let path = settings_path(&app)?;
+    Ok(read_file(&path).app)
+}
+
+/// 保存後、次の poll を待たずに launch.exe の存在確認を反映する
+#[tauri::command]
+pub fn settings_save_app(
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+    game: State<'_, GameState>,
+    settings: AppSettings,
+) -> Result<(), AuthError> {
+    let _guard = state.0.lock().expect("settings lock poisoned");
+    let path = settings_path(&app)?;
+    let mut file = read_file(&path);
+    let launcher_path = settings.launcher_path.clone();
+    file.app = settings;
+    write_file(&path, &file)?;
+    game.set_launcher_path(&app, launcher_path);
+    Ok(())
 }
 
 #[tauri::command]

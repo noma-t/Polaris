@@ -1,10 +1,19 @@
-import { useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { CheckIcon, DownloadIcon, ErrorIcon, SpinnerIcon } from "../components/icons";
+import { DEFAULT_LAUNCHER_PATH, loadAppSettings, saveAppSettings } from "../lib/settings";
 import { checkForUpdate, downloadAndInstallUpdate, type Update } from "../lib/updater";
 
 type UpdateStatus = "idle" | "checking" | "latest" | "available" | "downloading" | "installing" | "check-failed" | "update-failed";
 
-export function SettingsScreen({ version }: { version: string }) {
+interface SettingsScreenProps {
+  version: string;
+  /** 保存済みの launch.exe パスにファイルが存在するか */
+  isLauncherFound: boolean;
+  onError: (message: string) => void;
+}
+
+export function SettingsScreen({ version, isLauncherFound, onError }: SettingsScreenProps) {
   const [status, setStatus] = useState<UpdateStatus>("idle");
   const [update, setUpdate] = useState<Update | null>(null);
   /** download 進捗 (0〜1)。サイズ不明の場合は null */
@@ -85,6 +94,7 @@ export function SettingsScreen({ version }: { version: string }) {
 
   return (
     <div className="settings-list">
+      <LauncherSettingRow isLauncherFound={isLauncherFound} onError={onError} />
       <div className="settings-row">
         <div className="settings-row-text">
           <span className="settings-row-title">Updates</span>
@@ -115,6 +125,91 @@ export function SettingsScreen({ version }: { version: string }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** インスタンスを開くのに使う launch.exe のパス。確定 (blur / Enter / 参照 / リセット) 時に保存する */
+function LauncherSettingRow({ isLauncherFound, onError }: Pick<SettingsScreenProps, "isLauncherFound" | "onError">) {
+  const [savedPath, setSavedPath] = useState<string | null>(null);
+  const [draftPath, setDraftPath] = useState("");
+
+  useEffect(() => {
+    let isCancelled = false;
+    loadAppSettings()
+      .then((settings) => settings.launcherPath)
+      .catch(() => DEFAULT_LAUNCHER_PATH)
+      .then((path) => {
+        if (isCancelled) return;
+        setSavedPath(path);
+        setDraftPath(path);
+      });
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  const isLoaded = savedPath !== null;
+
+  const commit = async (path: string) => {
+    const next = path.trim();
+    setDraftPath(next);
+    if (next === savedPath) return;
+    try {
+      await saveAppSettings({ launcherPath: next });
+      setSavedPath(next);
+    } catch {
+      onError("Failed to save the launch.exe path");
+    }
+  };
+
+  const browse = async () => {
+    const selected = await open({
+      title: "Select VRChat launch.exe",
+      defaultPath: draftPath || DEFAULT_LAUNCHER_PATH,
+      filters: [{ name: "launch.exe", extensions: ["exe"] }],
+    }).catch(() => null);
+    if (selected) await commit(selected);
+  };
+
+  const onInputKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") e.currentTarget.blur();
+  };
+
+  return (
+    <div className="settings-row launcher-setting-row">
+      <div className="settings-row-text">
+        <span className="settings-row-title">VRChat launcher</span>
+        <span className="settings-row-description">Path to launch.exe, used to open instances in VRChat</span>
+      </div>
+      <div className="launcher-path-field">
+        <input
+          className="text-input launcher-path-input"
+          value={draftPath}
+          onChange={(e) => setDraftPath(e.target.value)}
+          onBlur={() => void commit(draftPath)}
+          onKeyDown={onInputKeyDown}
+          disabled={!isLoaded}
+          spellCheck={false}
+          aria-label="launch.exe path"
+        />
+        <button className="btn-secondary launcher-browse-button" onClick={() => void browse()} disabled={!isLoaded}>
+          Browse
+        </button>
+        <button
+          className="btn-secondary launcher-reset-button"
+          onClick={() => void commit(DEFAULT_LAUNCHER_PATH)}
+          disabled={!isLoaded || draftPath === DEFAULT_LAUNCHER_PATH}
+        >
+          Reset
+        </button>
+      </div>
+      {isLoaded && (
+        <span className={`launcher-path-status ${isLauncherFound ? "is-found" : "is-missing"}`}>
+          {isLauncherFound ? <CheckIcon size={18} strokeWidth={2.4} /> : <ErrorIcon size={18} />}
+          {isLauncherFound ? "launch.exe found" : "launch.exe not found"}
+        </span>
+      )}
     </div>
   );
 }

@@ -11,3 +11,14 @@ export interface UserSettings {
 export const loadUserSettings = (userId: string) => invoke<UserSettings>("settings_load_user", { userId });
 export const saveUserSettings = (userId: string, settings: UserSettings) =>
   invoke<void>("settings_save_user", { userId, settings });
+
+/** Rust 側 `settings.json` に保存する、VRChat アカウントに依らない設定 */
+export interface AppSettings {
+  /** インスタンスを開くのに使う VRChat の launch.exe */
+  launcherPath: string;
+}
+
+export const DEFAULT_LAUNCHER_PATH = "C:/Program Files (x86)/Steam/steamapps/common/VRChat/launch.exe";
+
+export const loadAppSettings = () => invoke<AppSettings>("settings_load_app");
+export const saveAppSettings = (settings: AppSettings) => invoke<void>("settings_save_app", { settings });

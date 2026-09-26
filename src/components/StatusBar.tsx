@@ -1,9 +1,6 @@
-import { useGameRunning } from "../hooks/useGameRunning";
 import { formatClock } from "../lib/format";
 
-export function StatusBar({ updatedAt }: { updatedAt: number | null }) {
-  const isGameRunning = useGameRunning();
-
+export function StatusBar({ updatedAt, isGameRunning }: { updatedAt: number | null; isGameRunning: boolean }) {
   return (
     <footer className="status-bar">
       <span
