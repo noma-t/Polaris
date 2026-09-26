@@ -9,6 +9,7 @@ import { VisibilityDialog, type VisibilityKind } from "./components/VisibilityDi
 import type { Screen } from "./components/navigation";
 import { MOCK_RATE_LIMITED } from "./data/mock";
 import type { VsuiGroup } from "./data/vsuiGroups";
+import { useAppSettings } from "./hooks/useAppSettings";
 import { useAppVersion } from "./hooks/useAppVersion";
 import { useElementWidth } from "./hooks/useElementWidth";
 import { useGameStatus } from "./hooks/useGameStatus";
@@ -16,6 +17,7 @@ import { useGroupInstances } from "./hooks/useGroupInstances";
 import { useSocial } from "./hooks/useSocial";
 import { useUserSettings } from "./hooks/useUserSettings";
 import { useToast } from "./hooks/useToast";
+import { useUpdater } from "./hooks/useUpdater";
 import { logout, restoreSession, type CurrentUser } from "./lib/auth";
 import { formatClock } from "./lib/format";
 import { openInstanceDisabledReason, openInstanceInGame } from "./lib/game";
@@ -26,6 +28,9 @@ import { RecommendScreen } from "./screens/RecommendScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 
 const RATE_LIMIT_RETRY_MS = 240_000;
+/** Settings を開いた状態で、この時間内に Settings をこの回数クリックすると Developer mode の設定項目を表示する */
+const DEVELOPER_MODE_REVEAL_CLICKS = 5;
+const DEVELOPER_MODE_REVEAL_WINDOW_MS = 1000;
 const SIDEBAR_OPEN_WIDTH = 256;
 /** main 領域の左右 padding 分の余白 */
 const MAIN_GUTTER = 44;
@@ -41,6 +46,10 @@ export default function App() {
   const [isRestoringSession, setIsRestoringSession] = useState(true);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [visibilityDialog, setVisibilityDialog] = useState<VisibilityKind | null>(null);
+  /** 隠しコマンドで Developer mode の設定項目を表示したか (保存しない) */
+  const [isDeveloperModeRevealed, setIsDeveloperModeRevealed] = useState(false);
+  /** Settings を開いた状態で Settings をクリックした時刻 */
+  const settingsClickTimesRef = useRef<number[]>([]);
   const {
     pinnedFriendIds,
     shownGroupIds,
@@ -51,6 +60,12 @@ export default function App() {
   } = useUserSettings(currentUser?.id ?? null);
   const { toast, showToast, hideToast } = useToast();
   const appVersion = useAppVersion((version) => showToast(`Updated to version ${version}`));
+  const { appSettings, updateAppSettings } = useAppSettings();
+  const updater = useUpdater({
+    isReady: appSettings !== null,
+    simulate: (appSettings?.developerMode && appSettings.simulateUpdateAvailable) ?? false,
+    onSimulatedInstallFinished: () => showToast("Simulated update finished. Nothing was installed."),
+  });
   const { friends, groups, updatedAt } = useSocial({
     isSignedIn: currentUser !== null,
     pinnedFriendIds,
@@ -103,7 +118,25 @@ export default function App() {
     setScreen("login");
   };
 
+  /** Developer mode がオンの間は、オフに戻せるよう常に表示する */
+  const isDeveloperModeVisible = isDeveloperModeRevealed || (appSettings?.developerMode ?? false);
+  useEffect(() => {
+    if (appSettings?.developerMode) setIsDeveloperModeRevealed(true);
+  }, [appSettings?.developerMode]);
+
+  const countSettingsClick = () => {
+    const now = Date.now();
+    const recent = [...settingsClickTimesRef.current, now].filter((t) => now - t < DEVELOPER_MODE_REVEAL_WINDOW_MS);
+    settingsClickTimesRef.current = recent;
+    if (recent.length < DEVELOPER_MODE_REVEAL_CLICKS || isDeveloperModeVisible) return;
+    settingsClickTimesRef.current = [];
+    setIsDeveloperModeRevealed(true);
+    showToast("Developer mode is now available");
+  };
+
   const navigate = (next: Screen) => {
+    if (next === "settings" && screen === "settings") countSettingsClick();
+    else settingsClickTimesRef.current = [];
     setVisibilityDialog(null);
     setScreen(next);
   };
@@ -169,6 +202,10 @@ export default function App() {
                   {screen === "settings" && (
                     <SettingsScreen
                       version={appVersion}
+                      appSettings={appSettings}
+                      onUpdateAppSettings={updateAppSettings}
+                      updater={updater}
+                      isDeveloperModeVisible={isDeveloperModeVisible}
                       isLauncherFound={gameStatus.isLauncherFound}
                       onError={(message) => showToast(message, "error")}
                     />
