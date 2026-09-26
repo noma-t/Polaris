@@ -11,18 +11,13 @@ export interface SortState {
 export const REFRESH_COOLDOWN_SEC = 5;
 
 /**
- * グループ欄の開閉・手動更新クールダウン・ソートの状態を管理する。
+ * グループ欄の手動更新クールダウン・ソートの状態を管理する (開閉状態は useUserSettings が保存する)。
  * インスタンス取得は未実装のため、取得・自動更新の処理はまだ持たない。
  * 画面切り替えで状態が失われないよう App 直下で使う。
  */
 export function useGroupInstances() {
-  const [openIds, setOpenIds] = useState<Record<string, boolean>>({});
   const [sort, setSort] = useState<SortState>({ key: "users", usersDir: "desc", createdDir: "new" });
   const [cooldownUntil, setCooldownUntil] = useState(0);
-
-  const toggleGroup = useCallback((groupId: string) => {
-    setOpenIds((s) => ({ ...s, [groupId]: !s[groupId] }));
-  }, []);
 
   const refreshGroup = useCallback(() => {
     setCooldownUntil(Date.now() + REFRESH_COOLDOWN_SEC * 1000);
@@ -39,11 +34,10 @@ export function useGroupInstances() {
   }, []);
 
   const reset = useCallback(() => {
-    setOpenIds({});
     setCooldownUntil(0);
   }, []);
 
-  return { openIds, sort, cooldownUntil, toggleGroup, refreshGroup, selectSort, reset };
+  return { sort, cooldownUntil, refreshGroup, selectSort, reset };
 }
 
 export type GroupInstancesState = ReturnType<typeof useGroupInstances>;

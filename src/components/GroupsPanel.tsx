@@ -6,7 +6,9 @@ import { ChevronDownIcon, GroupsIcon, VisibilityListIcon } from "./icons";
 interface GroupsPanelProps {
   groups: Group[];
   groupState: GroupInstancesState;
-  hiddenGroupIds: Record<string, boolean>;
+  shownGroupIds: Record<string, boolean>;
+  collapsedGroupIds: Record<string, boolean>;
+  onToggleCollapsed: (groupId: string) => void;
   onManage: () => void;
 }
 
@@ -15,13 +17,20 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: "created", label: "Created" },
 ];
 
-export function GroupsPanel({ groups, groupState, hiddenGroupIds, onManage }: GroupsPanelProps) {
-  const { openIds, sort, cooldownUntil, toggleGroup, refreshGroup, selectSort } = groupState;
+export function GroupsPanel({
+  groups,
+  groupState,
+  shownGroupIds,
+  collapsedGroupIds,
+  onToggleCollapsed,
+  onManage,
+}: GroupsPanelProps) {
+  const { sort, cooldownUntil, refreshGroup, selectSort } = groupState;
   const isCoolingCandidate = cooldownUntil > Date.now();
   const now = useNow(100, isCoolingCandidate);
   const cooldownMs = Math.min(REFRESH_COOLDOWN_SEC * 1000, Math.max(0, cooldownUntil - now));
   const isCooling = cooldownMs > 0;
-  const shownGroups = groups.filter((g) => !hiddenGroupIds[g.id]);
+  const shownGroups = groups.filter((g) => shownGroupIds[g.id]);
 
   return (
     <>
@@ -58,11 +67,11 @@ export function GroupsPanel({ groups, groupState, hiddenGroupIds, onManage }: Gr
 
       <div className="group-list">
         {shownGroups.map((group) => {
-          const isOpen = !!openIds[group.id];
+          const isOpen = !collapsedGroupIds[group.id];
           return (
             <div key={group.id} className={`group-card ${isOpen ? "is-open" : ""}`}>
               <div className="group-card-header">
-                <button className="group-toggle" onClick={() => toggleGroup(group.id)} aria-expanded={isOpen}>
+                <button className="group-toggle" onClick={() => onToggleCollapsed(group.id)} aria-expanded={isOpen}>
                   <span className="group-toggle-chevron">{isOpen ? "▼" : "▶"}</span>
                   <span className="group-name">{group.name}</span>
                 </button>

@@ -10,7 +10,7 @@ interface VisibilityDialogProps {
   friends: Friend[];
   groups: Group[];
   pinnedFriendIds: Record<string, boolean>;
-  hiddenGroupIds: Record<string, boolean>;
+  shownGroupIds: Record<string, boolean>;
   onToggleFriend: (friendId: string) => void;
   onToggleGroup: (groupId: string) => void;
   onClose: () => void;
@@ -33,7 +33,7 @@ export function VisibilityDialog({
   friends,
   groups,
   pinnedFriendIds,
-  hiddenGroupIds,
+  shownGroupIds,
   onToggleFriend,
   onToggleGroup,
   onClose,
@@ -53,7 +53,7 @@ export function VisibilityDialog({
         id: g.id,
         name: g.name,
         status: "",
-        isOn: !hiddenGroupIds[g.id],
+        isOn: !!shownGroupIds[g.id],
         onToggle: () => onToggleGroup(g.id),
       }))
     : [...friends].sort(compareFriends).map((f) => ({

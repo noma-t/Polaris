@@ -10,6 +10,7 @@ import { MOCK_RATE_LIMITED } from "./data/mock";
 import { useElementWidth } from "./hooks/useElementWidth";
 import { useGroupInstances } from "./hooks/useGroupInstances";
 import { useSocial } from "./hooks/useSocial";
+import { useUserSettings } from "./hooks/useUserSettings";
 import { useToast } from "./hooks/useToast";
 import { logout, restoreSession, type CurrentUser } from "./lib/auth";
 import { formatClock } from "./lib/format";
@@ -35,9 +36,15 @@ export default function App() {
   /** 起動時に保存済みセッションを確認している間は true */
   const [isRestoringSession, setIsRestoringSession] = useState(true);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
-  const [pinnedFriendIds, setPinnedFriendIds] = useState<Record<string, boolean>>({});
-  const [hiddenGroupIds, setHiddenGroupIds] = useState<Record<string, boolean>>({});
   const [visibilityDialog, setVisibilityDialog] = useState<VisibilityKind | null>(null);
+  const {
+    pinnedFriendIds,
+    shownGroupIds,
+    collapsedGroupIds,
+    togglePinnedFriend,
+    toggleShownGroup,
+    toggleGroupCollapsed,
+  } = useUserSettings(currentUser?.id ?? null);
   const groupState = useGroupInstances();
   const { toast, showToast, hideToast } = useToast();
   const { friends, groups, updatedAt } = useSocial({
@@ -78,8 +85,6 @@ export default function App() {
       showToast("Failed to clear the saved session", "error");
     }
     groupState.reset();
-    setPinnedFriendIds({});
-    setHiddenGroupIds({});
     setVisibilityDialog(null);
     setCurrentUser(null);
     setScreen("login");
@@ -129,7 +134,9 @@ export default function App() {
                       groups={groups}
                       groupState={groupState}
                       pinnedFriendIds={pinnedFriendIds}
-                      hiddenGroupIds={hiddenGroupIds}
+                      shownGroupIds={shownGroupIds}
+                      collapsedGroupIds={collapsedGroupIds}
+                      onToggleGroupCollapsed={toggleGroupCollapsed}
                       onOpenInstance={openInVRChat}
                       onManageFriends={() => setVisibilityDialog("friends")}
                       onManageGroups={() => setVisibilityDialog("groups")}
@@ -154,9 +161,9 @@ export default function App() {
           friends={friends}
           groups={groups}
           pinnedFriendIds={pinnedFriendIds}
-          hiddenGroupIds={hiddenGroupIds}
-          onToggleFriend={(id) => setPinnedFriendIds((s) => ({ ...s, [id]: !s[id] }))}
-          onToggleGroup={(id) => setHiddenGroupIds((s) => ({ ...s, [id]: !s[id] }))}
+          shownGroupIds={shownGroupIds}
+          onToggleFriend={togglePinnedFriend}
+          onToggleGroup={toggleShownGroup}
           onClose={closeVisibilityDialog}
         />
       )}

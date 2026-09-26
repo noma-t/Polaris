@@ -21,7 +21,9 @@ interface InstancesScreenProps {
   groups: Group[];
   groupState: GroupInstancesState;
   pinnedFriendIds: Record<string, boolean>;
-  hiddenGroupIds: Record<string, boolean>;
+  shownGroupIds: Record<string, boolean>;
+  collapsedGroupIds: Record<string, boolean>;
+  onToggleGroupCollapsed: (groupId: string) => void;
   onOpenInstance: (label: string) => void;
   onManageFriends: () => void;
   onManageGroups: () => void;
@@ -32,7 +34,9 @@ export function InstancesScreen({
   groups,
   groupState,
   pinnedFriendIds,
-  hiddenGroupIds,
+  shownGroupIds,
+  collapsedGroupIds,
+  onToggleGroupCollapsed,
   onOpenInstance,
   onManageFriends,
   onManageGroups,
@@ -121,7 +125,14 @@ export function InstancesScreen({
               <GroupsIcon size={26} className="panel-title-icon" />
             </button>
           ) : (
-            <GroupsPanel groups={groups} groupState={groupState} hiddenGroupIds={hiddenGroupIds} onManage={onManageGroups} />
+            <GroupsPanel
+              groups={groups}
+              groupState={groupState}
+              shownGroupIds={shownGroupIds}
+              collapsedGroupIds={collapsedGroupIds}
+              onToggleCollapsed={onToggleGroupCollapsed}
+              onManage={onManageGroups}
+            />
           )}
         </section>
 
