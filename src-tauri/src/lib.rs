@@ -56,6 +56,8 @@ pub fn run() {
             settings_store::settings_save_app,
             settings_store::settings_load_user,
             settings_store::settings_save_user,
+            settings_store::settings_load_ui,
+            settings_store::settings_save_ui,
             game_monitor::game_get_status,
             game_monitor::game_open_instance,
         ])

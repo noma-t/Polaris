@@ -9,6 +9,9 @@ interface SidebarProps {
   username: string;
   /** VRChat 側のアイコン URL。null ならプレースホルダーを表示する */
   userIconUrl: string | null;
+  /** 展開表示したいか。canExpand が false の間も保持する */
+  isOpenPreferred: boolean;
+  onOpenPreferredChange: (isOpen: boolean) => void;
   /** false の間は幅不足のため rail (折りたたみ) 表示に固定し、展開操作も無効にする */
   canExpand: boolean;
   /** 右上に通知 badge (ドット) を付ける nav item */
@@ -17,8 +20,17 @@ interface SidebarProps {
   onSignOut: () => void;
 }
 
-export function Sidebar({ activeScreen, username, userIconUrl, canExpand, badgedScreens, onNavigate, onSignOut }: SidebarProps) {
-  const [isOpenPreferred, setIsOpenPreferred] = useState(true);
+export function Sidebar({
+  activeScreen,
+  username,
+  userIconUrl,
+  isOpenPreferred,
+  onOpenPreferredChange,
+  canExpand,
+  badgedScreens,
+  onNavigate,
+  onSignOut,
+}: SidebarProps) {
   const isOpen = isOpenPreferred && canExpand;
   const isExpandable = canExpand && !isOpen;
   const [userMenuPos, setUserMenuPos] = useState<{ left: number; bottom: number } | null>(null);
@@ -37,7 +49,7 @@ export function Sidebar({ activeScreen, username, userIconUrl, canExpand, badged
         <div className="sidebar-header">
           <button
             className="sidebar-logo-button"
-            onClick={() => isExpandable && setIsOpenPreferred(true)}
+            onClick={() => isExpandable && onOpenPreferredChange(true)}
             aria-label={isExpandable ? "Open sidebar" : "Polaris"}
             title={isExpandable ? "Open sidebar" : "Polaris"}
           >
@@ -47,7 +59,7 @@ export function Sidebar({ activeScreen, username, userIconUrl, canExpand, badged
           <span className="sidebar-title">Polaris</span>
           <button
             className="sidebar-close-button"
-            onClick={() => setIsOpenPreferred(false)}
+            onClick={() => onOpenPreferredChange(false)}
             aria-label="Close sidebar"
             title="Close sidebar"
             tabIndex={isOpen ? 0 : -1}

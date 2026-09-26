@@ -4,6 +4,7 @@ import { GroupsPanel } from "../components/GroupsPanel";
 import { FriendIcon, GroupsIcon } from "../components/icons";
 import { useElementWidth } from "../hooks/useElementWidth";
 import type { GroupInstancesState } from "../hooks/useGroupInstances";
+import { DEFAULT_GROUPS_SHARE, type CollapsedPanel } from "../lib/settings";
 import type { Friend, Group } from "../lib/social";
 
 export const MIN_GROUPS_WIDTH = 410;
@@ -12,7 +13,6 @@ const MIN_FRIENDS_WIDTH = 240;
 const COLLAPSE_SNAP = 2 / 3;
 const COLLAPSED_STRIP_WIDTH = 36;
 const SPLIT_HANDLE_WIDTH = 10;
-const DEFAULT_GROUPS_SHARE = 58;
 /** grid 幅がこれ以上なら Groups / Friends を 2 カラムで並べる */
 const TWO_COLUMN_MIN_WIDTH = MIN_GROUPS_WIDTH + SPLIT_HANDLE_WIDTH + MIN_FRIENDS_WIDTH;
 
@@ -29,6 +29,10 @@ interface InstancesScreenProps {
   onOpenInstance: (location: string, label: string) => void;
   onManageFriends: () => void;
   onManageGroups: () => void;
+  /** Groups 欄が占める割合 (%) */
+  groupsShare: number;
+  collapsedPanel: CollapsedPanel | null;
+  onSplitChange: (split: { groupsShare?: number; collapsedPanel: CollapsedPanel | null }) => void;
 }
 
 export function InstancesScreen({
@@ -43,11 +47,12 @@ export function InstancesScreen({
   onOpenInstance,
   onManageFriends,
   onManageGroups,
+  groupsShare,
+  collapsedPanel,
+  onSplitChange,
 }: InstancesScreenProps) {
   const gridRef = useRef<HTMLDivElement>(null);
   const gridWidth = useElementWidth(gridRef, 1280);
-  const [groupsShare, setGroupsShare] = useState(DEFAULT_GROUPS_SHARE);
-  const [collapsedPanel, setCollapsedPanel] = useState<"groups" | "friends" | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   const isTwoColumn = gridWidth >= TWO_COLUMN_MIN_WIDTH;
@@ -67,10 +72,9 @@ export function InstancesScreen({
       const x = ev.clientX - rect.left;
       const lo = Math.min(50, (MIN_GROUPS_WIDTH / width) * 100);
       const hi = Math.max(50, 100 - (MIN_FRIENDS_WIDTH / width) * 100);
-      if (x < MIN_GROUPS_WIDTH * (1 - COLLAPSE_SNAP)) return setCollapsedPanel("groups");
-      if (x > width - MIN_FRIENDS_WIDTH * (1 - COLLAPSE_SNAP)) return setCollapsedPanel("friends");
-      setCollapsedPanel(null);
-      setGroupsShare(Math.round(Math.min(hi, Math.max(lo, (x / width) * 100)) * 10) / 10);
+      if (x < MIN_GROUPS_WIDTH * (1 - COLLAPSE_SNAP)) return onSplitChange({ collapsedPanel: "groups" });
+      if (x > width - MIN_FRIENDS_WIDTH * (1 - COLLAPSE_SNAP)) return onSplitChange({ collapsedPanel: "friends" });
+      onSplitChange({ collapsedPanel: null, groupsShare: Math.round(Math.min(hi, Math.max(lo, (x / width) * 100)) * 10) / 10 });
     };
     const onUp = () => {
       handle.removeEventListener("pointermove", onMove);
@@ -97,7 +101,7 @@ export function InstancesScreen({
       <div ref={gridRef} className={`instances-grid ${isTwoColumn ? "is-two-column" : ""}`} style={{ gridTemplateColumns }}>
         <section className={`instances-panel groups-panel ${isGroupsCollapsed ? "is-collapsed" : ""}`}>
           {isGroupsCollapsed ? (
-            <button className="panel-expand-button" onClick={() => setCollapsedPanel(null)} title="Show Groups">
+            <button className="panel-expand-button" onClick={() => onSplitChange({ collapsedPanel: null })} title="Show Groups">
               <GroupsIcon size={26} className="panel-title-icon" />
             </button>
           ) : (
@@ -118,7 +122,7 @@ export function InstancesScreen({
           <div
             className={`split-handle ${isDragging ? "is-dragging" : ""}`}
             onPointerDown={onSplitPointerDown}
-            onDoubleClick={() => setGroupsShare(DEFAULT_GROUPS_SHARE)}
+            onDoubleClick={() => onSplitChange({ collapsedPanel, groupsShare: DEFAULT_GROUPS_SHARE })}
             title="Drag to resize"
           >
             <div className="split-grip" />
@@ -127,7 +131,7 @@ export function InstancesScreen({
 
         <section className={`instances-panel friends-panel ${isFriendsCollapsed ? "is-collapsed" : ""}`}>
           {isFriendsCollapsed ? (
-            <button className="panel-expand-button" onClick={() => setCollapsedPanel(null)} title="Show Friends">
+            <button className="panel-expand-button" onClick={() => onSplitChange({ collapsedPanel: null })} title="Show Friends">
               <FriendIcon size={26} className="panel-title-icon" />
             </button>
           ) : (

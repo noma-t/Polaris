@@ -18,6 +18,9 @@ interface UseGroupInstancesOptions {
   isSignedIn: boolean;
   /** 表示中かつ展開中のグループが 1 つ以上ある */
   hasOpenGroup: boolean;
+  /** 保存済みの並び順 (useUiState が保存する) */
+  sort: SortState;
+  onSortChange: (sort: SortState) => void;
   onError: (message: string) => void;
 }
 
@@ -28,12 +31,11 @@ const groupByGroupId = (instances: GroupInstance[]) => {
 };
 
 /**
- * グループインスタンスの取得・自動更新・手動更新クールダウン・ソートの状態を管理する (開閉状態は useUserSettings が保存する)。
- * 全グループ分を 1 リクエストで取得し、展開中のグループがありアプリ表示中の間だけ自動更新する。
+ * グループインスタンスの取得・自動更新・手動更新クールダウンを管理する (開閉状態は useUserSettings、ソートは useUiState が保存する)。
+ * 全グループ分を 1 リクエストで取得し、展開中のグループがありアプリ表示中の間だけ自動更新する。手動更新は押されたグループだけを取得する。
  * 画面切り替えで状態が失われないよう App 直下で使う。
  */
-export function useGroupInstances({ isSignedIn, hasOpenGroup, onError }: UseGroupInstancesOptions) {
-  const [sort, setSort] = useState<SortState>({ key: "users", usersDir: "desc", createdDir: "new" });
+export function useGroupInstances({ isSignedIn, hasOpenGroup, sort, onSortChange, onError }: UseGroupInstancesOptions) {
   const [cooldownUntil, setCooldownUntil] = useState(0);
   /** groupId → インスタンス。未取得なら null */
   const [instancesByGroup, setInstancesByGroup] = useState<Record<string, GroupInstance[]> | null>(null);
@@ -110,14 +112,17 @@ export function useGroupInstances({ isSignedIn, hasOpenGroup, onError }: UseGrou
   );
 
   /** 同じキーなら方向を反転、別キーならキーだけ切り替える */
-  const selectSort = useCallback((key: SortKey) => {
-    setSort((s) => {
-      if (s.key !== key) return { ...s, key };
-      return key === "users"
-        ? { ...s, usersDir: s.usersDir === "desc" ? "asc" : "desc" }
-        : { ...s, createdDir: s.createdDir === "new" ? "old" : "new" };
-    });
-  }, []);
+  const selectSort = useCallback(
+    (key: SortKey) => {
+      if (sort.key !== key) return onSortChange({ ...sort, key });
+      onSortChange(
+        key === "users"
+          ? { ...sort, usersDir: sort.usersDir === "desc" ? "asc" : "desc" }
+          : { ...sort, createdDir: sort.createdDir === "new" ? "old" : "new" },
+      );
+    },
+    [sort, onSortChange],
+  );
 
   const reset = useCallback(() => {
     sessionRef.current += 1;
