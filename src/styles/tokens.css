@@ -40,6 +40,11 @@
   --color-warn: oklch(0.82 0.12 45);
   --color-warn-bg: oklch(0.27 0.05 45);
   --color-warn-border: oklch(0.55 0.11 45);
+  --color-danger: oklch(0.68 0.19 25);
+
+  /* Game status */
+  --color-game-running: oklch(0.76 0.15 150);
+  --color-game-stopped: oklch(0.5 0.01 250);
 
   /* Logo */
   --logo-line: #5900ff;

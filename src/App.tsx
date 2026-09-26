@@ -1,14 +1,21 @@
-import { useCallback, useRef, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { OverlayScrollArea } from "./components/OverlayScrollArea";
+import { PolarisLogo } from "./components/PolarisLogo";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/Toast";
 import { VisibilityDialog, type VisibilityKind } from "./components/VisibilityDialog";
 import type { Screen } from "./components/navigation";
-import { INITIAL_PINNED_FRIENDS, MOCK_RATE_LIMITED } from "./data/mock";
+import { MOCK_RATE_LIMITED } from "./data/mock";
+import type { VsuiGroup } from "./data/vsuiGroups";
+import { useAppVersion } from "./hooks/useAppVersion";
 import { useElementWidth } from "./hooks/useElementWidth";
 import { useGroupInstances } from "./hooks/useGroupInstances";
+import { useSocial } from "./hooks/useSocial";
+import { useUserSettings } from "./hooks/useUserSettings";
 import { useToast } from "./hooks/useToast";
+import { logout, restoreSession, type CurrentUser } from "./lib/auth";
 import { formatClock } from "./lib/format";
 import { AboutScreen } from "./screens/AboutScreen";
 import { InstancesScreen, MIN_GROUPS_WIDTH } from "./screens/InstancesScreen";
@@ -16,7 +23,6 @@ import { LoginScreen } from "./screens/LoginScreen";
 import { RecommendScreen } from "./screens/RecommendScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 
-const APP_VERSION = "0.1.0";
 const RATE_LIMIT_RETRY_MS = 240_000;
 const SIDEBAR_OPEN_WIDTH = 256;
 /** main 領域の左右 padding 分の余白 */
@@ -29,15 +35,67 @@ export default function App() {
   const layoutWidth = useElementWidth(rootRef, 1280);
 
   const [screen, setScreen] = useState<Screen>("login");
-  const [username, setUsername] = useState("");
-  const [pinnedFriendIds, setPinnedFriendIds] = useState(INITIAL_PINNED_FRIENDS);
-  const [hiddenGroupIds, setHiddenGroupIds] = useState<Record<string, boolean>>({});
+  /** 起動時に保存済みセッションを確認している間は true */
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [visibilityDialog, setVisibilityDialog] = useState<VisibilityKind | null>(null);
-  const groupState = useGroupInstances({ rateLimited: MOCK_RATE_LIMITED });
+  const {
+    pinnedFriendIds,
+    shownGroupIds,
+    collapsedGroupIds,
+    togglePinnedFriend,
+    toggleShownGroup,
+    toggleGroupCollapsed,
+  } = useUserSettings(currentUser?.id ?? null);
   const { toast, showToast, hideToast } = useToast();
+  const appVersion = useAppVersion((version) => showToast(`Updated to version ${version}`));
+  const { friends, groups, updatedAt } = useSocial({
+    isSignedIn: currentUser !== null,
+    pinnedFriendIds,
+    onSessionExpired: () => {
+      showToast("Session expired. Please sign in again.", "error");
+      void signOut();
+    },
+  });
+  const hasOpenGroup = screen === "instances" && groups.some((g) => shownGroupIds[g.id] && !collapsedGroupIds[g.id]);
+  const groupState = useGroupInstances({
+    isSignedIn: currentUser !== null,
+    hasOpenGroup,
+    onError: (message) => showToast(message, "error"),
+  });
+  const lastUpdatedAt = Math.max(updatedAt ?? 0, groupState.updatedAt ?? 0) || null;
 
-  const signOut = () => {
+  const completeSignIn = (user: CurrentUser) => {
+    setCurrentUser(user);
+    setScreen("instances");
+  };
+
+  useEffect(() => {
+    let isCancelled = false;
+    restoreSession()
+      .then((user) => {
+        if (user && !isCancelled) completeSignIn(user);
+      })
+      .catch(() => {
+        // 復元に失敗した場合 (オフライン等) はログイン画面から始める
+      })
+      .finally(() => {
+        if (!isCancelled) setIsRestoringSession(false);
+      });
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  const signOut = async () => {
+    try {
+      await logout();
+    } catch {
+      showToast("Failed to clear the saved session", "error");
+    }
     groupState.reset();
+    setVisibilityDialog(null);
+    setCurrentUser(null);
     setScreen("login");
   };
 
@@ -48,22 +106,25 @@ export default function App() {
 
   const closeVisibilityDialog = useCallback(() => setVisibilityDialog(null), []);
   const openInVRChat = (label: string) => showToast(`Opened “${label}” in VRChat`);
+  const openGroupPageInBrowser = (group: VsuiGroup) => {
+    openUrl(`https://vrchat.com/home/group/${group.groupId}`).catch(() => showToast(`Failed to open “${group.name}” in browser`, "error"));
+  };
 
   return (
     <div ref={rootRef} className={`app-root ${screen === "login" ? "" : "is-signed-in"}`}>
-      {screen === "login" ? (
-        <LoginScreen
-          onSignedIn={(name) => {
-            setUsername(name);
-            setScreen("instances");
-          }}
-        />
+      {isRestoringSession ? (
+        <div className="app-splash" aria-busy="true" aria-label="Restoring session">
+          <PolarisLogo className="app-splash-logo" />
+        </div>
+      ) : screen === "login" ? (
+        <LoginScreen onSignedIn={completeSignIn} onError={(message) => showToast(message, "error")} />
       ) : (
         <div className="app-shell">
           <div className="app-body">
             <Sidebar
               activeScreen={screen}
-              username={username}
+              username={currentUser?.displayName ?? ""}
+              userIconUrl={currentUser?.iconUrl ?? null}
               canExpand={layoutWidth >= SIDEBAR_EXPANDABLE_MIN_WIDTH}
               onNavigate={navigate}
               onSignOut={signOut}
@@ -81,34 +142,40 @@ export default function App() {
 
                   {screen === "instances" && (
                     <InstancesScreen
+                      friends={friends}
+                      groups={groups}
                       groupState={groupState}
                       pinnedFriendIds={pinnedFriendIds}
-                      hiddenGroupIds={hiddenGroupIds}
+                      shownGroupIds={shownGroupIds}
+                      collapsedGroupIds={collapsedGroupIds}
+                      onToggleGroupCollapsed={toggleGroupCollapsed}
                       onOpenInstance={openInVRChat}
                       onManageFriends={() => setVisibilityDialog("friends")}
                       onManageGroups={() => setVisibilityDialog("groups")}
                     />
                   )}
                   {screen === "recommend" && (
-                    <RecommendScreen onOpenGroupPage={(name) => showToast(`Opened “${name}” group page in VRChat`)} />
+                    <RecommendScreen onOpenGroupPage={openGroupPageInBrowser} />
                   )}
-                  {screen === "settings" && <SettingsScreen version={APP_VERSION} />}
-                  {screen === "info" && <AboutScreen version={APP_VERSION} />}
+                  {screen === "settings" && <SettingsScreen version={appVersion} />}
+                  {screen === "info" && <AboutScreen version={appVersion} />}
                 </div>
               </OverlayScrollArea>
             </main>
           </div>
-          <StatusBar updatedAt={groupState.updatedAt} />
+          <StatusBar updatedAt={lastUpdatedAt} />
         </div>
       )}
 
       {screen === "instances" && visibilityDialog && (
         <VisibilityDialog
           kind={visibilityDialog}
+          friends={friends}
+          groups={groups}
           pinnedFriendIds={pinnedFriendIds}
-          hiddenGroupIds={hiddenGroupIds}
-          onToggleFriend={(id) => setPinnedFriendIds((s) => ({ ...s, [id]: !s[id] }))}
-          onToggleGroup={(id) => setHiddenGroupIds((s) => ({ ...s, [id]: !s[id] }))}
+          shownGroupIds={shownGroupIds}
+          onToggleFriend={togglePinnedFriend}
+          onToggleGroup={toggleShownGroup}
           onClose={closeVisibilityDialog}
         />
       )}

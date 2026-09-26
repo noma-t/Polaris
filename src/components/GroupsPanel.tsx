@@ -1,11 +1,18 @@
-import { MOCK_GROUPS, type GroupInstance } from "../data/mock";
+import { useRef, type CSSProperties } from "react";
+import { useElementHeight } from "../hooks/useElementHeight";
 import { REFRESH_COOLDOWN_SEC, type GroupInstancesState, type SortKey } from "../hooks/useGroupInstances";
 import { useNow } from "../hooks/useNow";
+import { formatClock } from "../lib/format";
+import type { Group, GroupAccessType, GroupInstance } from "../lib/social";
 import { ChevronDownIcon, GroupsIcon, VisibilityListIcon } from "./icons";
+import { OverlayScrollArea } from "./OverlayScrollArea";
 
 interface GroupsPanelProps {
+  groups: Group[];
   groupState: GroupInstancesState;
-  hiddenGroupIds: Record<string, boolean>;
+  shownGroupIds: Record<string, boolean>;
+  collapsedGroupIds: Record<string, boolean>;
+  onToggleCollapsed: (groupId: string) => void;
   onOpenInstance: (label: string) => void;
   onManage: () => void;
 }
@@ -15,13 +22,30 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: "created", label: "Created" },
 ];
 
-export function GroupsPanel({ groupState, hiddenGroupIds, onOpenInstance, onManage }: GroupsPanelProps) {
-  const { openIds, loadingIds, sort, cooldownUntil, toggleGroup, refreshGroup, selectSort } = groupState;
+const ACCESS_TYPE_LABELS: Record<GroupAccessType, string> = {
+  public: "Group Public",
+  plus: "Group+",
+  members: "Group",
+};
+
+export function GroupsPanel({
+  groups,
+  groupState,
+  shownGroupIds,
+  collapsedGroupIds,
+  onToggleCollapsed,
+  onOpenInstance,
+  onManage,
+}: GroupsPanelProps) {
+  const { sort, cooldownUntil, instancesByGroup, isLoading, hasLoadFailed, refreshGroup, selectSort } = groupState;
   const isCoolingCandidate = cooldownUntil > Date.now();
   const now = useNow(100, isCoolingCandidate);
   const cooldownMs = Math.min(REFRESH_COOLDOWN_SEC * 1000, Math.max(0, cooldownUntil - now));
   const isCooling = cooldownMs > 0;
-  const shownGroups = MOCK_GROUPS.filter((g) => !hiddenGroupIds[g.id]);
+  const shownGroups = groups.filter((g) => shownGroupIds[g.id]);
+  const headerRef = useRef<HTMLDivElement>(null);
+  // 1 カラム時は panel-header も sticky なので、group-card-header はその直下に貼り付ける
+  const headerHeight = useElementHeight(headerRef, 68);
 
   const compareInstances = (a: GroupInstance, b: GroupInstance) =>
     sort.key === "users"
@@ -29,12 +53,12 @@ export function GroupsPanel({ groupState, hiddenGroupIds, onOpenInstance, onMana
         ? b.userCount - a.userCount
         : a.userCount - b.userCount
       : sort.createdDir === "new"
-        ? b.createdMinutes - a.createdMinutes
-        : a.createdMinutes - b.createdMinutes;
+        ? b.createdOrder - a.createdOrder
+        : a.createdOrder - b.createdOrder;
 
   return (
     <>
-      <div className="panel-header groups-panel-header">
+      <div ref={headerRef} className="panel-header groups-panel-header">
         <h2 className="panel-title">
           <GroupsIcon size={26} className="panel-title-icon" />
           Groups
@@ -63,61 +87,67 @@ export function GroupsPanel({ groupState, hiddenGroupIds, onOpenInstance, onMana
         </div>
       </div>
 
-      {shownGroups.length === 0 && <div className="panel-empty">No groups shown</div>}
+      <OverlayScrollArea viewportClassName="panel-body">
+        {shownGroups.length === 0 && <div className="panel-empty">No groups shown</div>}
 
-      <div className="group-list">
-        {shownGroups.map((group) => {
-          const isOpen = !!openIds[group.id];
-          const isLoading = !!loadingIds[group.id];
-          const count = group.instances.length;
-          const rows = isOpen && !isLoading ? group.instances.slice().sort(compareInstances) : [];
-          return (
-            <div key={group.id} className={`group-card ${isOpen ? "is-open" : ""}`}>
-              <div className="group-card-header">
-                <button className="group-toggle" onClick={() => toggleGroup(group.id)} aria-expanded={isOpen}>
-                  <span className="group-toggle-chevron">{isOpen ? "▼" : "▶"}</span>
-                  <span className="group-name">{group.name}</span>
-                  <span className={`group-instance-count ${count ? "" : "is-zero"}`}>{count}</span>
-                </button>
-                {isOpen && (
-                  <button className="group-refresh-button" onClick={refreshGroup} disabled={isCooling}>
-                    <span>Refresh</span>
-                    <span
-                      className="cooldown-progress"
-                      style={{ width: `${(cooldownMs / (REFRESH_COOLDOWN_SEC * 1000)) * 100}%` }}
-                    />
+        <div className="group-list" style={{ "--groups-panel-header-height": `${headerHeight}px` } as CSSProperties}>
+          {shownGroups.map((group) => {
+            const isOpen = !collapsedGroupIds[group.id];
+            const instances = instancesByGroup?.[group.id] ?? [];
+            const count = instances.length;
+            const rows = isOpen ? instances.slice().sort(compareInstances) : [];
+            return (
+              <div key={group.id} className={`group-card ${isOpen ? "is-open" : ""}`}>
+                <div className="group-card-header">
+                  <button className="group-toggle" onClick={() => onToggleCollapsed(group.id)} aria-expanded={isOpen}>
+                    <span className="group-toggle-chevron">{isOpen ? "▼" : "▶"}</span>
+                    <span className="group-name">{group.name}</span>
+                    {instancesByGroup && <span className={`group-instance-count ${count ? "" : "is-zero"}`}>{count}</span>}
                   </button>
+                  {isOpen && (
+                    <button className="group-refresh-button" onClick={refreshGroup} disabled={isCooling}>
+                      <span>Refresh</span>
+                      <span
+                        className="cooldown-progress"
+                        style={{ width: `${(cooldownMs / (REFRESH_COOLDOWN_SEC * 1000)) * 100}%` }}
+                      />
+                    </button>
+                  )}
+                </div>
+                {isOpen && (
+                  <div className="group-instance-list">
+                    {!instancesByGroup && (
+                      <div className="group-list-message">{hasLoadFailed && !isLoading ? "Failed to load instances" : "Loading…"}</div>
+                    )}
+                    {instancesByGroup && count === 0 && <div className="group-list-message">No instances</div>}
+                    {rows.map((instance) => (
+                      <div key={instance.id} className="instance-row">
+                        <div className="instance-info">
+                          <div className="instance-primary">
+                            <span className="instance-world">{instance.worldName}</span>
+                            <span className={`instance-user-count ${instance.userCount >= instance.capacity ? "is-full" : ""}`}>
+                              ({instance.userCount}/{instance.capacity})
+                            </span>
+                          </div>
+                          <div className="instance-secondary">
+                            <span className="instance-access-type">{ACCESS_TYPE_LABELS[instance.accessType]}</span>
+                            <span className="instance-created" title="First seen by Polaris">
+                              {formatClock(instance.firstSeenAt)}
+                            </span>
+                          </div>
+                        </div>
+                        <button className="btn-accent open-button" onClick={() => onOpenInstance(instance.worldName)}>
+                          Open
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
-              {isOpen && (
-                <div className="group-instance-list">
-                  {isLoading && <div className="group-list-message">Loading…</div>}
-                  {!isLoading && count === 0 && <div className="group-list-message">No instances</div>}
-                  {rows.map((inst) => (
-                    <div key={inst.id} className="instance-row">
-                      <div className="instance-info">
-                        <div className="instance-primary">
-                          <span className="instance-world">{inst.world}</span>
-                          <span className={`instance-user-count ${inst.userCount >= inst.capacity ? "is-full" : ""}`}>
-                            ({inst.userCount}/{inst.capacity})
-                          </span>
-                        </div>
-                        <div className="instance-secondary">
-                          <span className="instance-access-type">{inst.accessType}</span>
-                          <span className="instance-created">{inst.createdLabel}</span>
-                        </div>
-                      </div>
-                      <button className="btn-accent open-button" onClick={() => onOpenInstance(inst.world)}>
-                        Open
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      </OverlayScrollArea>
     </>
   );
 }

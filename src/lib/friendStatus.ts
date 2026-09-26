@@ -1,4 +1,4 @@
-import type { Friend, FriendStatus } from "../data/mock";
+import type { Friend, FriendStatus } from "./social";
 
 export const FRIEND_STATUS_META: Record<FriendStatus, { color: string; label: string }> = {
   join: { color: "oklch(0.72 0.13 245)", label: "Join Me" },
@@ -8,16 +8,43 @@ export const FRIEND_STATUS_META: Record<FriendStatus, { color: string; label: st
   offline: { color: "oklch(0.5 0.01 250)", label: "Offline" },
 };
 
-/** 現在地の表示文字列 (オフライン / 非公開 / ワールド名) */
+/** 現在地の表示文字列 (オフライン / 非公開 / 移動中 / Web / ワールド名) */
 export function friendLocationLabel(friend: Friend): string {
-  if (friend.isOffline) return "Offline";
-  if (friend.isPrivate) return "Private";
-  return friend.world ?? "";
+  switch (friend.locationKind) {
+    case "offline":
+      return "Offline";
+    case "private":
+      return "Private";
+    case "traveling":
+      return "Traveling";
+    case "website":
+      return "Website";
+    case "world":
+      return friend.worldName ?? "In world";
+  }
 }
 
-/** 一覧での並び順: 公開インスタンス → 非公開 → オフライン */
+/** Open できる (World 名が判明しているインスタンス内にいる) か */
+export const canOpenFriendLocation = (friend: Friend) => friend.locationKind === "world" && friend.worldName !== null;
+
+/**
+ * 一覧での並び順:
+ * インスタンス内 → 非公開・移動中 (Join Me / Online → Ask Me → Do Not Disturb) → Web → オフライン
+ */
 export function friendRank(friend: Friend): number {
-  if (friend.isOffline) return 2;
-  if (friend.isPrivate) return 1;
-  return 0;
+  switch (friend.locationKind) {
+    case "world":
+      return 0;
+    case "private":
+    case "traveling":
+      if (friend.status === "ask") return 2;
+      if (friend.status === "busy") return 3;
+      return 1;
+    case "website":
+      return 4;
+    case "offline":
+      return 5;
+  }
 }
+
+export const compareFriends = (a: Friend, b: Friend) => friendRank(a) - friendRank(b) || a.name.localeCompare(b.name);

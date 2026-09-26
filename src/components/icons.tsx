@@ -123,6 +123,14 @@ export const ChevronDownIcon =(p: IconProps) => (
   </StrokeIcon>
 );
 
+export const ErrorIcon = (p: IconProps) => (
+  <StrokeIcon {...p} strokeWidth={2.2}>
+    <circle cx="12" cy="12" r="9" />
+    <line x1="12" y1="7.5" x2="12" y2="13" />
+    <circle cx="12" cy="16.4" r="0.6" />
+  </StrokeIcon>
+);
+
 export const CheckIcon = ({ strokeWidth = 2.6, ...p }: IconProps & { strokeWidth?: number }) => (
   <StrokeIcon {...p} viewBox="0 0 20 20" strokeWidth={strokeWidth}>
     <polyline points="4,10.5 8.5,15 16,5.5" />
@@ -141,5 +149,14 @@ export const DownloadIcon = (p: IconProps) => (
     <line x1="10" y1="3.5" x2="10" y2="13" />
     <polyline points="5.5,9 10,13.5 14.5,9" />
     <line x1="4" y1="17" x2="16" y2="17" />
+  </StrokeIcon>
+);
+
+/** 外部リンク (ブラウザで開く) */
+export const ExternalLinkIcon = (p: IconProps) => (
+  <StrokeIcon {...p} strokeWidth={2.2}>
+    <path d="M18 13.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4.5" />
+    <polyline points="14 4 20 4 20 10" />
+    <line x1="11" y1="13" x2="20" y2="4" />
   </StrokeIcon>
 );

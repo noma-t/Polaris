@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { describeAuthError, isAuthError } from "../lib/auth";
+import { getGroupInstances, type GroupInstance } from "../lib/social";
 
 export type SortKey = "users" | "created";
 export interface SortState {
@@ -9,65 +11,88 @@ export interface SortState {
 
 /** 手動更新の全体共通クールダウン (秒) */
 export const REFRESH_COOLDOWN_SEC = 5;
-const FIRST_LOAD_DELAY_MS = 800;
 const AUTO_REFRESH_BASE_MS = 60_000;
 const AUTO_REFRESH_JITTER_MS = 15_000;
 
+interface UseGroupInstancesOptions {
+  isSignedIn: boolean;
+  /** 表示中かつ展開中のグループが 1 つ以上ある */
+  hasOpenGroup: boolean;
+  onError: (message: string) => void;
+}
+
+const groupByGroupId = (instances: GroupInstance[]) => {
+  const byGroup: Record<string, GroupInstance[]> = {};
+  for (const instance of instances) (byGroup[instance.groupId] ??= []).push(instance);
+  return byGroup;
+};
+
 /**
- * グループ欄の開閉・初回取得・自動更新・手動更新クールダウン・ソートの状態を管理する (モック)。
+ * グループインスタンスの取得・自動更新・手動更新クールダウン・ソートの状態を管理する (開閉状態は useUserSettings が保存する)。
+ * 全グループ分を 1 リクエストで取得し、展開中のグループがありアプリ表示中の間だけ自動更新する。
  * 画面切り替えで状態が失われないよう App 直下で使う。
  */
-export function useGroupInstances({ rateLimited }: { rateLimited: boolean }) {
-  const [openIds, setOpenIds] = useState<Record<string, boolean>>({});
-  const [loadedIds, setLoadedIds] = useState<Record<string, boolean>>({});
-  const [loadingIds, setLoadingIds] = useState<Record<string, boolean>>({});
+export function useGroupInstances({ isSignedIn, hasOpenGroup, onError }: UseGroupInstancesOptions) {
   const [sort, setSort] = useState<SortState>({ key: "users", usersDir: "desc", createdDir: "new" });
   const [cooldownUntil, setCooldownUntil] = useState(0);
+  /** groupId → インスタンス。未取得なら null */
+  const [instancesByGroup, setInstancesByGroup] = useState<Record<string, GroupInstance[]> | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  /** 未取得のまま取得に失敗した */
+  const [hasLoadFailed, setHasLoadFailed] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const isFetchingRef = useRef(false);
   const nextAutoRef = useRef(0);
-  const openIdsRef = useRef(openIds);
-  openIdsRef.current = openIds;
+  /** reset のたびに進め、サインアウト前に始まった取得の結果を捨てる */
+  const sessionRef = useRef(0);
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
 
-  // 自動更新: グループ欄を展開中かつアプリ表示中のみ
-  useEffect(() => {
-    const id = setInterval(() => {
-      const now = Date.now();
-      const anyOpen = Object.values(openIdsRef.current).some(Boolean);
-      if (!anyOpen || rateLimited || document.visibilityState !== "visible") return;
-      if (nextAutoRef.current && now >= nextAutoRef.current) {
-        setUpdatedAt(now);
-        nextAutoRef.current = now + AUTO_REFRESH_BASE_MS + Math.random() * AUTO_REFRESH_JITTER_MS;
+  const fetchInstances = useCallback(async (shouldReportError: boolean) => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+    const session = sessionRef.current;
+    setIsLoading(true);
+    try {
+      const instances = await getGroupInstances();
+      if (session !== sessionRef.current) return;
+      setInstancesByGroup(groupByGroupId(instances));
+      setHasLoadFailed(false);
+      setUpdatedAt(Date.now());
+    } catch (error) {
+      if (session !== sessionRef.current) return;
+      setHasLoadFailed(true);
+      // unauthorized は useSocial の session-expired 通知でサインアウトさせる
+      const isUnauthorized = isAuthError(error) && error.kind === "unauthorized";
+      if (shouldReportError && !isUnauthorized) onErrorRef.current(describeAuthError(error));
+    } finally {
+      if (session === sessionRef.current) {
+        isFetchingRef.current = false;
+        setIsLoading(false);
+        nextAutoRef.current = Date.now() + AUTO_REFRESH_BASE_MS + Math.random() * AUTO_REFRESH_JITTER_MS;
       }
+    }
+  }, []);
+
+  // 初回取得: サインイン中に初めてグループが展開されたとき
+  useEffect(() => {
+    if (isSignedIn && hasOpenGroup && instancesByGroup === null && !hasLoadFailed) void fetchInstances(true);
+  }, [isSignedIn, hasOpenGroup, instancesByGroup, hasLoadFailed, fetchInstances]);
+
+  // 自動更新: グループを展開中かつアプリ表示中のみ
+  useEffect(() => {
+    if (!isSignedIn || !hasOpenGroup) return;
+    const id = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      if (nextAutoRef.current && Date.now() >= nextAutoRef.current) void fetchInstances(false);
     }, 1000);
     return () => clearInterval(id);
-  }, [rateLimited]);
-
-  const toggleGroup = useCallback(
-    (groupId: string) => {
-      if (openIds[groupId]) {
-        setOpenIds((s) => ({ ...s, [groupId]: false }));
-        return;
-      }
-      const isFirstOpen = !loadedIds[groupId];
-      setOpenIds((s) => ({ ...s, [groupId]: true }));
-      if (!nextAutoRef.current) nextAutoRef.current = Date.now() + AUTO_REFRESH_BASE_MS;
-      if (isFirstOpen) {
-        setLoadingIds((s) => ({ ...s, [groupId]: true }));
-        setTimeout(() => {
-          setLoadingIds((s) => ({ ...s, [groupId]: false }));
-          setLoadedIds((s) => ({ ...s, [groupId]: true }));
-          setUpdatedAt(Date.now());
-        }, FIRST_LOAD_DELAY_MS);
-      }
-    },
-    [openIds, loadedIds],
-  );
+  }, [isSignedIn, hasOpenGroup, fetchInstances]);
 
   const refreshGroup = useCallback(() => {
-    const now = Date.now();
-    setCooldownUntil(now + REFRESH_COOLDOWN_SEC * 1000);
-    setUpdatedAt(now);
-  }, []);
+    setCooldownUntil(Date.now() + REFRESH_COOLDOWN_SEC * 1000);
+    void fetchInstances(true);
+  }, [fetchInstances]);
 
   /** 同じキーなら方向を反転、別キーならキーだけ切り替える */
   const selectSort = useCallback((key: SortKey) => {
@@ -80,14 +105,17 @@ export function useGroupInstances({ rateLimited }: { rateLimited: boolean }) {
   }, []);
 
   const reset = useCallback(() => {
-    setOpenIds({});
-    setLoadedIds({});
-    setLoadingIds({});
-    setUpdatedAt(null);
+    sessionRef.current += 1;
+    isFetchingRef.current = false;
     nextAutoRef.current = 0;
+    setCooldownUntil(0);
+    setInstancesByGroup(null);
+    setIsLoading(false);
+    setHasLoadFailed(false);
+    setUpdatedAt(null);
   }, []);
 
-  return { openIds, loadingIds, sort, cooldownUntil, updatedAt, toggleGroup, refreshGroup, selectSort, reset };
+  return { sort, cooldownUntil, instancesByGroup, isLoading, hasLoadFailed, updatedAt, refreshGroup, selectSort, reset };
 }
 
 export type GroupInstancesState = ReturnType<typeof useGroupInstances>;
