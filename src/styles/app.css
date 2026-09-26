@@ -1349,6 +1349,13 @@ a:hover {
 }
 
 /* ===== Recommend (V-Sui Groups) ===== */
+/* 注記はスクロールしない高さなら画面の最下部、スクロールする高さならカード群の直下に置く */
+.recommend-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
 .recommend-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr));
@@ -1392,6 +1399,12 @@ a:hover {
   margin-top: auto;
   min-height: 44px;
   font-size: 15px;
+}
+.recommend-footer-note {
+  margin: auto 0 0;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  text-align: center;
 }
 
 /* ===== Settings ===== */
