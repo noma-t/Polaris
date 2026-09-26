@@ -27,11 +27,24 @@ export function friendLocationLabel(friend: Friend): string {
 /** Open できる (World 名が判明しているインスタンス内にいる) か */
 export const canOpenFriendLocation = (friend: Friend) => friend.locationKind === "world" && friend.worldName !== null;
 
-/** 一覧での並び順: インスタンス内 → 非公開・移動中・Web → オフライン */
+/**
+ * 一覧での並び順:
+ * インスタンス内 → 非公開・移動中 (Join Me / Online → Ask Me → Do Not Disturb) → Web → オフライン
+ */
 export function friendRank(friend: Friend): number {
-  if (friend.locationKind === "offline") return 2;
-  if (friend.locationKind === "world") return 0;
-  return 1;
+  switch (friend.locationKind) {
+    case "world":
+      return 0;
+    case "private":
+    case "traveling":
+      if (friend.status === "ask") return 2;
+      if (friend.status === "busy") return 3;
+      return 1;
+    case "website":
+      return 4;
+    case "offline":
+      return 5;
+  }
 }
 
 export const compareFriends = (a: Friend, b: Friend) => friendRank(a) - friendRank(b) || a.name.localeCompare(b.name);
