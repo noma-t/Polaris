@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { NAV_SCREENS, type NavScreen } from "../components/navigation";
+import type { SortState } from "../hooks/useGroupInstances";
 
 /** Rust 側 `settings.json` に VRChat userId ごとに保存する表示設定 */
 export interface UserSettings {
@@ -32,3 +34,51 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 
 export const loadAppSettings = () => invoke<AppSettings>("settings_load_app");
 export const saveAppSettings = (settings: AppSettings) => invoke<void>("settings_save_app", { settings });
+
+/** Rust 側 `settings.json` に保存する、次回起動時に復元する PC 単位の UI 状態 */
+export interface UiState {
+  activeScreen: NavScreen;
+  /** Sidebar を展開表示したいか (幅不足で rail 表示に固定される場合も保持する) */
+  isSidebarOpen: boolean;
+  /** Instances 画面で Groups 欄が占める割合 (%) */
+  groupsShare: number;
+  /** 折りたたんでいる欄。どちらも表示中なら null */
+  collapsedPanel: CollapsedPanel | null;
+  sort: SortState;
+}
+
+export type CollapsedPanel = "groups" | "friends";
+
+export const DEFAULT_GROUPS_SHARE = 58;
+
+export const DEFAULT_UI_STATE: UiState = {
+  activeScreen: "instances",
+  isSidebarOpen: true,
+  groupsShare: DEFAULT_GROUPS_SHARE,
+  collapsedPanel: null,
+  sort: { key: "users", usersDir: "desc", createdDir: "new" },
+};
+
+const pick = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T =>
+  allowed.includes(value as T) ? (value as T) : fallback;
+
+/** 手編集や旧バージョンで想定外の値が入っていても、既定値に置き換えて使えるようにする */
+const normalizeUiState = (raw: Partial<UiState>): UiState => {
+  const d = DEFAULT_UI_STATE;
+  const sort: Partial<SortState> = raw.sort ?? {};
+  const groupsShare = raw.groupsShare;
+  return {
+    activeScreen: pick(raw.activeScreen, NAV_SCREENS, d.activeScreen),
+    isSidebarOpen: typeof raw.isSidebarOpen === "boolean" ? raw.isSidebarOpen : d.isSidebarOpen,
+    groupsShare: typeof groupsShare === "number" && groupsShare > 0 && groupsShare < 100 ? groupsShare : d.groupsShare,
+    collapsedPanel: raw.collapsedPanel === "groups" || raw.collapsedPanel === "friends" ? raw.collapsedPanel : null,
+    sort: {
+      key: pick(sort.key, ["users", "created"], d.sort.key),
+      usersDir: pick(sort.usersDir, ["desc", "asc"], d.sort.usersDir),
+      createdDir: pick(sort.createdDir, ["new", "old"], d.sort.createdDir),
+    },
+  };
+};
+
+export const loadUiState = () => invoke<Partial<UiState>>("settings_load_ui").then(normalizeUiState);
+export const saveUiState = (ui: UiState) => invoke<void>("settings_save_ui", { ui });

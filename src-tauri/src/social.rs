@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 
 use crate::pipeline::{self, PipelineEvent};
 use crate::vrchat_client::{AuthError, VrchatClient, FRIENDS_PAGE_SIZE};
-use crate::vrchat_models::{ApiFriend, ApiInstance};
+use crate::vrchat_models::{ApiFriend, ApiGroupInstance, ApiInstance};
 
 pub const FRIENDS_UPDATED_EVENT: &str = "social://friends-updated";
 pub const GROUPS_UPDATED_EVENT: &str = "social://groups-updated";
@@ -149,7 +149,16 @@ pub struct GroupInstanceView {
     capacity: u32,
     /// API に作成時刻が無いため、Polaris が初めて観測した時刻 (epoch ms) を表示に使う
     first_seen_at: i64,
-    /// Created ソート用の値。大きいほど新しい。API はおおむね作成が新しい順に返すので、レスポンス内の位置を逆順にして振る
+    /// Created ソート用の値。大きいほど新しい
+    created_order: u32,
+}
+
+/// 観測済みのグループインスタンスについて、取得をまたいで保持する値
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SeenInstance {
+    /// 初めて観測した時刻 (epoch ms)
+    first_seen_at: i64,
+    /// 初めて観測したときに振った Created ソート用の値。以降の取得では変えない
     created_order: u32,
 }
 
@@ -159,6 +168,21 @@ fn group_access_type_from_api(access_type: &str) -> &'static str {
         "plus" => "plus",
         _ => "members",
     }
+}
+
+/// location の `~key(value)` 部分から value を取り出す
+fn location_param<'a>(location: &'a str, key: &str) -> Option<&'a str> {
+    location.split('~').skip(1).find_map(|part| part.strip_prefix(key)?.strip_prefix('(')?.strip_suffix(')'))
+}
+
+/// 取得元 API ごとの形の違いを吸収した、グループインスタンス 1 件分の値
+struct ObservedGroupInstance {
+    location: String,
+    group_id: String,
+    world_name: String,
+    access_type: &'static str,
+    user_count: u32,
+    capacity: u32,
 }
 
 fn now_epoch_ms() -> i64 {
@@ -174,8 +198,10 @@ struct SocialStore {
     world_names: HashMap<String, String>,
     world_retry_at: HashMap<String, Instant>,
     groups: Vec<GroupView>,
-    /// グループインスタンスの location → 初めて観測した時刻 (epoch ms)
-    instance_first_seen: HashMap<String, i64>,
+    /// グループインスタンスの location → 観測済みの値
+    instance_seen: HashMap<String, SeenInstance>,
+    /// 次に初めて見るグループインスタンスに振る Created ソート用の値
+    next_created_order: u32,
 }
 
 impl SocialStore {
@@ -243,33 +269,86 @@ impl SocialStore {
         }
     }
 
-    /// 取得したグループインスタンスから表示用データを作る。
+    /// 全グループ分のインスタンスから表示用データを作る。
     /// 初めて見る location は `now_ms` を記録し、今回含まれなかった (閉じた) location の記録は破棄する
     fn apply_group_instances(&mut self, instances: Vec<ApiInstance>, now_ms: i64) -> Vec<GroupInstanceView> {
-        let mut first_seen = HashMap::new();
-        let count = instances.len();
+        let observed = instances
+            .into_iter()
+            .filter(|inst| inst.owner_id.starts_with("grp_"))
+            .map(|inst| ObservedGroupInstance {
+                access_type: group_access_type_from_api(&inst.group_access_type),
+                location: inst.location,
+                group_id: inst.owner_id,
+                world_name: inst.world.name,
+                user_count: inst.user_count,
+                capacity: inst.capacity,
+            })
+            .collect();
+        let (views, seen) = self.group_instance_views(observed, now_ms);
+        self.instance_seen = seen;
+        views
+    }
+
+    /// 1 グループ分のインスタンスから表示用データを作る。
+    /// 観測済みの記録はこのグループの分だけ置き換え、ほかのグループの記録は残す
+    fn apply_instances_of_group(&mut self, group_id: &str, instances: Vec<ApiGroupInstance>, now_ms: i64) -> Vec<GroupInstanceView> {
+        let observed = instances
+            .into_iter()
+            .map(|inst| ObservedGroupInstance {
+                access_type: group_access_type_from_api(location_param(&inst.location, "groupAccessType").unwrap_or_default()),
+                location: inst.location,
+                group_id: group_id.to_owned(),
+                world_name: inst.world.name,
+                user_count: inst.member_count,
+                capacity: inst.world.capacity,
+            })
+            .collect();
+        let (views, seen) = self.group_instance_views(observed, now_ms);
+        self.instance_seen.retain(|location, _| location_param(location, "group") != Some(group_id));
+        self.instance_seen.extend(seen);
+        views
+    }
+
+    /// 表示用データと、そのインスタンスの location → 観測済みの値を返す。
+    /// 観測済みのインスタンスは記録済みの値を使い、Created 順を変えない。初めて見るインスタンスだけ既存より新しい値を振る
+    fn group_instance_views(
+        &mut self,
+        instances: Vec<ObservedGroupInstance>,
+        now_ms: i64,
+    ) -> (Vec<GroupInstanceView>, HashMap<String, SeenInstance>) {
+        let instances: Vec<_> = instances.into_iter().filter(|inst| !inst.location.is_empty() && !inst.world_name.is_empty()).collect();
+        let mut seen = HashMap::new();
+        // API はおおむね作成が新しい順に返すので、初めて見るインスタンスには末尾 (古い方) から順に値を振る
+        for inst in instances.iter().rev() {
+            if seen.contains_key(&inst.location) {
+                continue;
+            }
+            let entry = match self.instance_seen.get(&inst.location) {
+                Some(entry) => *entry,
+                None => {
+                    self.next_created_order += 1;
+                    SeenInstance { first_seen_at: now_ms, created_order: self.next_created_order }
+                }
+            };
+            seen.insert(inst.location.clone(), entry);
+        }
         let views = instances
             .into_iter()
-            .enumerate()
-            .filter(|(_, inst)| !inst.location.is_empty() && inst.owner_id.starts_with("grp_") && !inst.world.name.is_empty())
-            .map(|(index, inst)| {
-                let first_seen_at = *first_seen
-                    .entry(inst.location.clone())
-                    .or_insert_with(|| self.instance_first_seen.get(&inst.location).copied().unwrap_or(now_ms));
+            .map(|inst| {
+                let SeenInstance { first_seen_at, created_order } = seen[&inst.location];
                 GroupInstanceView {
                     id: inst.location,
-                    group_id: inst.owner_id,
-                    world_name: inst.world.name,
-                    access_type: group_access_type_from_api(&inst.group_access_type),
+                    group_id: inst.group_id,
+                    world_name: inst.world_name,
+                    access_type: inst.access_type,
                     user_count: inst.user_count,
                     capacity: inst.capacity,
                     first_seen_at,
-                    created_order: (count - 1 - index) as u32,
+                    created_order,
                 }
             })
             .collect();
-        self.instance_first_seen = first_seen;
-        views
+        (views, seen)
     }
 
     /// pipeline イベントを適用する。Friends の snapshot を送り直す必要があれば true
@@ -508,6 +587,21 @@ impl SocialState {
             .ok_or(AuthError::Unauthorized)
     }
 
+    /// 指定した 1 グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
+    pub async fn fetch_instances_of_group(&self, group_id: &str) -> Result<Vec<GroupInstanceView>, AuthError> {
+        let session = self.session.lock().expect("social session poisoned").clone().ok_or(AuthError::Unauthorized)?;
+        let instances = match session.client.get_group_instances(group_id).await {
+            Ok(instances) => instances,
+            Err(error) => {
+                session.handle_error(&error);
+                return Err(error);
+            }
+        };
+        session
+            .with_store(|store| store.apply_instances_of_group(group_id, instances, now_epoch_ms()))
+            .ok_or(AuthError::Unauthorized)
+    }
+
     /// pinned を置き換え、`is_world_loading` が変わるので snapshot を返す
     pub fn set_pinned(&self, ids: Vec<String>) -> Vec<FriendView> {
         let mut store = self.store.lock().expect("social store poisoned");
@@ -519,7 +613,7 @@ impl SocialState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vrchat_models::ApiWorld;
+    use crate::vrchat_models::{ApiGroupInstanceWorld, ApiWorld};
 
     fn api_friend(id: &str, status: &str, location: &str) -> ApiFriend {
         ApiFriend { id: id.into(), display_name: id.to_uppercase(), status: status.into(), location: location.into() }
@@ -606,8 +700,67 @@ mod tests {
         assert_eq!(views[0].first_seen_at, 100);
         assert_eq!(views[1].first_seen_at, 200);
         assert_eq!(views[1].access_type, "members");
-        assert_eq!(views.iter().map(|v| v.created_order).collect::<Vec<_>>(), [1, 0]);
-        assert!(!store.instance_first_seen.contains_key("wrld_a:1"));
+        // 既知の wrld_a:2 は初回の値のまま、初めて見る wrld_a:3 だけ既存より新しい値になる
+        assert_eq!(views.iter().map(|v| v.created_order).collect::<Vec<_>>(), [1, 3]);
+        assert!(!store.instance_seen.contains_key("wrld_a:1"));
+    }
+
+    #[test]
+    fn keeps_created_order_of_known_instances_on_group_refresh() {
+        let mut store = SocialStore::default();
+        store.apply_group_instances(vec![api_instance("wrld_a:2~group(grp_1)", "public"), api_instance("wrld_a:1~group(grp_1)", "public")], 100);
+
+        // 1 グループ分の API はレスポンス順が異なっても既知の順序を変えない
+        let views = store.apply_instances_of_group(
+            "grp_1",
+            vec![
+                api_group_instance("wrld_a:1~group(grp_1)", 7),
+                api_group_instance("wrld_a:3~group(grp_1)", 1),
+                api_group_instance("wrld_a:2~group(grp_1)", 9),
+            ],
+            200,
+        );
+        let order = |id: &str| views.iter().find(|v| v.id == id).unwrap().created_order;
+        assert_eq!((order("wrld_a:1~group(grp_1)"), order("wrld_a:2~group(grp_1)"), order("wrld_a:3~group(grp_1)")), (1, 2, 3));
+        assert_eq!(views.iter().find(|v| v.id == "wrld_a:1~group(grp_1)").unwrap().user_count, 7);
+    }
+
+    fn api_group_instance(location: &str, member_count: u32) -> ApiGroupInstance {
+        ApiGroupInstance {
+            location: location.into(),
+            member_count,
+            world: ApiGroupInstanceWorld { name: "Quiet Shore".into(), capacity: 60 },
+        }
+    }
+
+    #[test]
+    fn parses_location_params() {
+        let location = "wrld_a:1~group(grp_1)~groupAccessType(plus)~region(us)";
+        assert_eq!(location_param(location, "group"), Some("grp_1"));
+        assert_eq!(location_param(location, "groupAccessType"), Some("plus"));
+        assert_eq!(location_param(location, "private"), None);
+    }
+
+    #[test]
+    fn replaces_instances_of_one_group_only() {
+        let mut store = SocialStore::default();
+        let mut other = api_instance("wrld_a:9~group(grp_2)", "public");
+        other.owner_id = "grp_2".into();
+        store.apply_group_instances(vec![api_instance("wrld_a:1~group(grp_1)", "public"), other], 100);
+
+        let views = store.apply_instances_of_group(
+            "grp_1",
+            vec![api_group_instance("wrld_a:2~group(grp_1)~groupAccessType(plus)", 5)],
+            200,
+        );
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].group_id, "grp_1");
+        assert_eq!(views[0].access_type, "plus");
+        assert_eq!((views[0].user_count, views[0].capacity), (5, 60));
+        assert_eq!(views[0].first_seen_at, 200);
+        // grp_1 の閉じたインスタンスの記録だけ消え、grp_2 の記録は残る
+        assert!(!store.instance_seen.contains_key("wrld_a:1~group(grp_1)"));
+        assert_eq!(store.instance_seen.get("wrld_a:9~group(grp_2)").map(|seen| seen.first_seen_at), Some(100));
     }
 
     #[test]

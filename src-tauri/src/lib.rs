@@ -14,6 +14,7 @@ use game_monitor::GameState;
 use settings_store::SettingsState;
 use social::SocialState;
 use tauri::Manager;
+use tauri_plugin_window_state::StateFlags;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -25,6 +26,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // 位置は OS 既定のままにし、サイズと最大化状態だけを復元する
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(StateFlags::SIZE | StateFlags::MAXIMIZED)
+                .build(),
+        )
         .manage(AuthState::new())
         .manage(SocialState::new())
         .manage(SettingsState::new())
@@ -43,11 +50,14 @@ pub fn run() {
             social_commands::social_get_friends,
             social_commands::social_get_groups,
             social_commands::social_get_group_instances,
+            social_commands::social_get_instances_of_group,
             social_commands::social_set_pinned_friends,
             settings_store::settings_load_app,
             settings_store::settings_save_app,
             settings_store::settings_load_user,
             settings_store::settings_save_user,
+            settings_store::settings_load_ui,
+            settings_store::settings_save_ui,
             game_monitor::game_get_status,
             game_monitor::game_open_instance,
         ])

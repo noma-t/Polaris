@@ -52,3 +52,23 @@ pub struct ApiInstance {
     pub group_access_type: String,
     pub world: ApiWorld,
 }
+
+/// `GET /groups/{groupId}/instances` の要素。
+/// `userCount` / `capacity` / `groupAccessType` / `ownerId` は含まれない
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ApiGroupInstance {
+    /// `wrld_…:…~group(grp_…)~groupAccessType(…)~…` 形式
+    pub location: String,
+    /// インスタンス内の人数
+    pub member_count: u32,
+    pub world: ApiGroupInstanceWorld,
+}
+
+/// `ApiGroupInstance` の `world` のうち表示に使うフィールド
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ApiGroupInstanceWorld {
+    pub name: String,
+    pub capacity: u32,
+}

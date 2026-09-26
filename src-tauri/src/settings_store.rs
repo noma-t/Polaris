@@ -1,5 +1,5 @@
 //! アプリ共通の設定 (launch.exe のパス・Developer 向け設定) と、ユーザーごとの表示設定
-//! (pinned friend・表示する group・折りたたんだ group) を app data dir の `settings.json` に保存する。
+//! (pinned friend・表示する group・折りたたんだ group)、前回終了時の UI 状態を app data dir の `settings.json` に保存する。
 
 use std::collections::HashMap;
 use std::fs;
@@ -47,10 +47,60 @@ pub struct UserSettings {
     pub collapsed_group_ids: Vec<String>,
 }
 
+/// Instances 画面のグループインスタンスの並び順
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SortSettings {
+    /// "users" | "created"
+    pub key: String,
+    /// "desc" | "asc"
+    pub users_dir: String,
+    /// "new" | "old"
+    pub created_dir: String,
+}
+
+impl Default for SortSettings {
+    fn default() -> Self {
+        Self {
+            key: "users".to_owned(),
+            users_dir: "desc".to_owned(),
+            created_dir: "new".to_owned(),
+        }
+    }
+}
+
+/// 次回起動時に復元する、PC 単位の UI 状態。値の検証はフロントエンド側で行う
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UiState {
+    /// 開いていた画面 ("instances" | "recommend" | "settings" | "info")
+    pub active_screen: String,
+    /// Sidebar を展開表示するか (幅不足で rail 表示に固定される場合も、この希望は保持する)
+    pub is_sidebar_open: bool,
+    /// Instances 画面で Groups 欄が占める割合 (%)
+    pub groups_share: f64,
+    /// 折りたたんでいる欄 ("groups" | "friends")。どちらも表示中なら None
+    pub collapsed_panel: Option<String>,
+    pub sort: SortSettings,
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self {
+            active_screen: "instances".to_owned(),
+            is_sidebar_open: true,
+            groups_share: 58.0,
+            collapsed_panel: None,
+            sort: SortSettings::default(),
+        }
+    }
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct SettingsFile {
     app: AppSettings,
+    ui: UiState,
     /// VRChat の userId ごとの設定
     users: HashMap<String, UserSettings>,
 }
@@ -142,5 +192,21 @@ pub fn settings_save_user(
     let path = settings_path(&app)?;
     let mut file = read_file(&path);
     file.users.insert(user_id, settings);
+    write_file(&path, &file)
+}
+
+#[tauri::command]
+pub fn settings_load_ui(app: AppHandle, state: State<'_, SettingsState>) -> Result<UiState, AuthError> {
+    let _guard = state.0.lock().expect("settings lock poisoned");
+    let path = settings_path(&app)?;
+    Ok(read_file(&path).ui)
+}
+
+#[tauri::command]
+pub fn settings_save_ui(app: AppHandle, state: State<'_, SettingsState>, ui: UiState) -> Result<(), AuthError> {
+    let _guard = state.0.lock().expect("settings lock poisoned");
+    let path = settings_path(&app)?;
+    let mut file = read_file(&path);
+    file.ui = ui;
     write_file(&path, &file)
 }

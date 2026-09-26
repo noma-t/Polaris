@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { describeAuthError, isAuthError } from "../lib/auth";
-import { getGroupInstances, type GroupInstance } from "../lib/social";
+import { getGroupInstances, getInstancesOfGroup, type GroupInstance } from "../lib/social";
 
 export type SortKey = "users" | "created";
 export interface SortState {
@@ -10,7 +10,7 @@ export interface SortState {
 }
 
 /** 手動更新の全体共通クールダウン (秒) */
-export const REFRESH_COOLDOWN_SEC = 5;
+export const REFRESH_COOLDOWN_SEC = 3;
 const AUTO_REFRESH_BASE_MS = 60_000;
 const AUTO_REFRESH_JITTER_MS = 15_000;
 
@@ -18,6 +18,9 @@ interface UseGroupInstancesOptions {
   isSignedIn: boolean;
   /** 表示中かつ展開中のグループが 1 つ以上ある */
   hasOpenGroup: boolean;
+  /** 保存済みの並び順 (useUiState が保存する) */
+  sort: SortState;
+  onSortChange: (sort: SortState) => void;
   onError: (message: string) => void;
 }
 
@@ -28,12 +31,11 @@ const groupByGroupId = (instances: GroupInstance[]) => {
 };
 
 /**
- * グループインスタンスの取得・自動更新・手動更新クールダウン・ソートの状態を管理する (開閉状態は useUserSettings が保存する)。
- * 全グループ分を 1 リクエストで取得し、展開中のグループがありアプリ表示中の間だけ自動更新する。
+ * グループインスタンスの取得・自動更新・手動更新クールダウンを管理する (開閉状態は useUserSettings、ソートは useUiState が保存する)。
+ * 全グループ分を 1 リクエストで取得し、展開中のグループがありアプリ表示中の間だけ自動更新する。手動更新は押されたグループだけを取得する。
  * 画面切り替えで状態が失われないよう App 直下で使う。
  */
-export function useGroupInstances({ isSignedIn, hasOpenGroup, onError }: UseGroupInstancesOptions) {
-  const [sort, setSort] = useState<SortState>({ key: "users", usersDir: "desc", createdDir: "new" });
+export function useGroupInstances({ isSignedIn, hasOpenGroup, sort, onSortChange, onError }: UseGroupInstancesOptions) {
   const [cooldownUntil, setCooldownUntil] = useState(0);
   /** groupId → インスタンス。未取得なら null */
   const [instancesByGroup, setInstancesByGroup] = useState<Record<string, GroupInstance[]> | null>(null);
@@ -48,20 +50,28 @@ export function useGroupInstances({ isSignedIn, hasOpenGroup, onError }: UseGrou
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
-  const fetchInstances = useCallback(async (shouldReportError: boolean) => {
+  /** `groupId` を指定するとそのグループだけ取得して差し替える。省略時は全グループ分を取得する */
+  const fetchInstances = useCallback(async (shouldReportError: boolean, groupId?: string) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     const session = sessionRef.current;
     setIsLoading(true);
     try {
-      const instances = await getGroupInstances();
-      if (session !== sessionRef.current) return;
-      setInstancesByGroup(groupByGroupId(instances));
-      setHasLoadFailed(false);
+      if (groupId === undefined) {
+        const instances = await getGroupInstances();
+        if (session !== sessionRef.current) return;
+        setInstancesByGroup(groupByGroupId(instances));
+        setHasLoadFailed(false);
+      } else {
+        const instances = await getInstancesOfGroup(groupId);
+        if (session !== sessionRef.current) return;
+        setInstancesByGroup((prev) => prev && { ...prev, [groupId]: instances });
+      }
       setUpdatedAt(Date.now());
     } catch (error) {
       if (session !== sessionRef.current) return;
-      setHasLoadFailed(true);
+      // 1 グループの取得失敗では取得済みの表示を残す
+      if (groupId === undefined) setHasLoadFailed(true);
       // unauthorized は useSocial の session-expired 通知でサインアウトさせる
       const isUnauthorized = isAuthError(error) && error.kind === "unauthorized";
       if (shouldReportError && !isUnauthorized) onErrorRef.current(describeAuthError(error));
@@ -69,7 +79,10 @@ export function useGroupInstances({ isSignedIn, hasOpenGroup, onError }: UseGrou
       if (session === sessionRef.current) {
         isFetchingRef.current = false;
         setIsLoading(false);
-        nextAutoRef.current = Date.now() + AUTO_REFRESH_BASE_MS + Math.random() * AUTO_REFRESH_JITTER_MS;
+        // 1 グループの取得ではほかのグループが古いままなので、自動更新の予定は延ばさない
+        if (groupId === undefined) {
+          nextAutoRef.current = Date.now() + AUTO_REFRESH_BASE_MS + Math.random() * AUTO_REFRESH_JITTER_MS;
+        }
       }
     }
   }, []);
@@ -89,20 +102,27 @@ export function useGroupInstances({ isSignedIn, hasOpenGroup, onError }: UseGrou
     return () => clearInterval(id);
   }, [isSignedIn, hasOpenGroup, fetchInstances]);
 
-  const refreshGroup = useCallback(() => {
-    setCooldownUntil(Date.now() + REFRESH_COOLDOWN_SEC * 1000);
-    void fetchInstances(true);
-  }, [fetchInstances]);
+  /** 押されたグループだけ再取得する。全グループ分が未取得なら全体取得にフォールバックする */
+  const refreshGroup = useCallback(
+    (groupId: string) => {
+      setCooldownUntil(Date.now() + REFRESH_COOLDOWN_SEC * 1000);
+      void fetchInstances(true, instancesByGroup === null ? undefined : groupId);
+    },
+    [fetchInstances, instancesByGroup],
+  );
 
   /** 同じキーなら方向を反転、別キーならキーだけ切り替える */
-  const selectSort = useCallback((key: SortKey) => {
-    setSort((s) => {
-      if (s.key !== key) return { ...s, key };
-      return key === "users"
-        ? { ...s, usersDir: s.usersDir === "desc" ? "asc" : "desc" }
-        : { ...s, createdDir: s.createdDir === "new" ? "old" : "new" };
-    });
-  }, []);
+  const selectSort = useCallback(
+    (key: SortKey) => {
+      if (sort.key !== key) return onSortChange({ ...sort, key });
+      onSortChange(
+        key === "users"
+          ? { ...sort, usersDir: sort.usersDir === "desc" ? "asc" : "desc" }
+          : { ...sort, createdDir: sort.createdDir === "new" ? "old" : "new" },
+      );
+    },
+    [sort, onSortChange],
+  );
 
   const reset = useCallback(() => {
     sessionRef.current += 1;

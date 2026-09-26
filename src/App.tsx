@@ -6,17 +6,18 @@ import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/Toast";
 import { VisibilityDialog, type VisibilityKind } from "./components/VisibilityDialog";
-import type { Screen } from "./components/navigation";
+import type { NavScreen, Screen } from "./components/navigation";
 import { MOCK_RATE_LIMITED } from "./data/mock";
 import type { VsuiGroup } from "./data/vsuiGroups";
 import { useAppSettings } from "./hooks/useAppSettings";
 import { useAppVersion } from "./hooks/useAppVersion";
 import { useElementWidth } from "./hooks/useElementWidth";
 import { useGameStatus } from "./hooks/useGameStatus";
-import { useGroupInstances } from "./hooks/useGroupInstances";
+import { useGroupInstances, type SortState } from "./hooks/useGroupInstances";
 import { useSocial } from "./hooks/useSocial";
 import { useUserSettings } from "./hooks/useUserSettings";
 import { useToast } from "./hooks/useToast";
+import { useUiState } from "./hooks/useUiState";
 import { useUpdater } from "./hooks/useUpdater";
 import { logout, restoreSession, type CurrentUser } from "./lib/auth";
 import { formatClock } from "./lib/format";
@@ -41,7 +42,6 @@ export default function App() {
   const rootRef = useRef<HTMLDivElement>(null);
   const layoutWidth = useElementWidth(rootRef, 1280);
 
-  const [screen, setScreen] = useState<Screen>("login");
   /** 起動時に保存済みセッションを確認している間は true */
   const [isRestoringSession, setIsRestoringSession] = useState(true);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
@@ -50,6 +50,9 @@ export default function App() {
   const [isDeveloperModeRevealed, setIsDeveloperModeRevealed] = useState(false);
   /** Settings を開いた状態で Settings をクリックした時刻 */
   const settingsClickTimesRef = useRef<number[]>([]);
+  const { uiState, isUiStateLoaded, updateUiState } = useUiState();
+  /** サインイン中は前回開いていた画面を復元する */
+  const screen: Screen = currentUser ? uiState.activeScreen : "login";
   const {
     pinnedFriendIds,
     shownGroupIds,
@@ -74,26 +77,24 @@ export default function App() {
       void signOut();
     },
   });
+  const changeSort = useCallback((sort: SortState) => updateUiState({ sort }), [updateUiState]);
   const hasOpenGroup = screen === "instances" && groups.some((g) => shownGroupIds[g.id] && !collapsedGroupIds[g.id]);
   const groupState = useGroupInstances({
     isSignedIn: currentUser !== null,
     hasOpenGroup,
+    sort: uiState.sort,
+    onSortChange: changeSort,
     onError: (message) => showToast(message, "error"),
   });
   const lastUpdatedAt = Math.max(updatedAt ?? 0, groupState.updatedAt ?? 0) || null;
   const gameStatus = useGameStatus();
   const openDisabledReason = openInstanceDisabledReason(gameStatus);
 
-  const completeSignIn = (user: CurrentUser) => {
-    setCurrentUser(user);
-    setScreen("instances");
-  };
-
   useEffect(() => {
     let isCancelled = false;
     restoreSession()
       .then((user) => {
-        if (user && !isCancelled) completeSignIn(user);
+        if (user && !isCancelled) setCurrentUser(user);
       })
       .catch(() => {
         // 復元に失敗した場合 (オフライン等) はログイン画面から始める
@@ -115,7 +116,6 @@ export default function App() {
     groupState.reset();
     setVisibilityDialog(null);
     setCurrentUser(null);
-    setScreen("login");
   };
 
   /** Developer mode がオンの間は、オフに戻せるよう常に表示する */
@@ -134,11 +134,11 @@ export default function App() {
     showToast("Developer mode is now available");
   };
 
-  const navigate = (next: Screen) => {
+  const navigate = (next: NavScreen) => {
     if (next === "settings" && screen === "settings") countSettingsClick();
     else settingsClickTimesRef.current = [];
     setVisibilityDialog(null);
-    setScreen(next);
+    updateUiState({ activeScreen: next });
   };
 
   const closeVisibilityDialog = useCallback(() => setVisibilityDialog(null), []);
@@ -153,12 +153,12 @@ export default function App() {
 
   return (
     <div ref={rootRef} className={`app-root ${screen === "login" ? "" : "is-signed-in"}`}>
-      {isRestoringSession ? (
+      {isRestoringSession || !isUiStateLoaded ? (
         <div className="app-splash" aria-busy="true" aria-label="Restoring session">
           <PolarisLogo className="app-splash-logo" />
         </div>
       ) : screen === "login" ? (
-        <LoginScreen onSignedIn={completeSignIn} onError={(message) => showToast(message, "error")} />
+        <LoginScreen onSignedIn={setCurrentUser} onError={(message) => showToast(message, "error")} />
       ) : (
         <div className="app-shell">
           <div className="app-body">
@@ -166,6 +166,8 @@ export default function App() {
               activeScreen={screen}
               username={currentUser?.displayName ?? ""}
               userIconUrl={currentUser?.iconUrl ?? null}
+              isOpenPreferred={uiState.isSidebarOpen}
+              onOpenPreferredChange={(isSidebarOpen) => updateUiState({ isSidebarOpen })}
               canExpand={layoutWidth >= SIDEBAR_EXPANDABLE_MIN_WIDTH}
               badgedScreens={updater.isUpdateAvailable ? ["settings"] : []}
               onNavigate={navigate}
@@ -195,6 +197,9 @@ export default function App() {
                       onOpenInstance={openInVRChat}
                       onManageFriends={() => setVisibilityDialog("friends")}
                       onManageGroups={() => setVisibilityDialog("groups")}
+                      groupsShare={uiState.groupsShare}
+                      collapsedPanel={uiState.collapsedPanel}
+                      onSplitChange={updateUiState}
                     />
                   )}
                   {screen === "recommend" && (

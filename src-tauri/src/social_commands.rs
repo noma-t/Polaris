@@ -22,6 +22,15 @@ pub async fn social_get_group_instances(state: State<'_, SocialState>) -> Result
     state.fetch_group_instances().await
 }
 
+/// 指定した 1 グループのインスタンスを VRChat API から取得する
+#[tauri::command]
+pub async fn social_get_instances_of_group(
+    state: State<'_, SocialState>,
+    group_id: String,
+) -> Result<Vec<GroupInstanceView>, AuthError> {
+    state.fetch_instances_of_group(&group_id).await
+}
+
 /// pinned friend を置き換える。World 名の取得対象と `isWorldLoading` が変わるので snapshot を送り直す
 #[tauri::command]
 pub fn social_set_pinned_friends(app: AppHandle, state: State<'_, SocialState>, ids: Vec<String>) {

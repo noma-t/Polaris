@@ -1476,7 +1476,8 @@ a:hover {
   font-weight: 700;
 }
 .settings-row-description,
-.settings-update-status {
+.settings-update-status,
+.settings-update-last-checked {
   font-size: 15px;
   color: var(--color-text-muted);
 }
@@ -1486,6 +1487,16 @@ a:hover {
 .settings-version {
   font-family: var(--font-mono);
   color: var(--color-text);
+}
+/* Update ボタンは常に text と同じ行に置き、幅が足りない分は text 側を省略表示する */
+.update-setting-row .settings-row-text {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.update-setting-row .settings-row-text > * {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .update-button {
   position: relative;

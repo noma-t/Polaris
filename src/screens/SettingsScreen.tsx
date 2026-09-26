@@ -2,6 +2,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { CheckIcon, DownloadIcon, ErrorIcon, SpinnerIcon } from "../components/icons";
 import type { UpdaterState, UpdateStatus } from "../hooks/useUpdater";
+import { formatDateTime } from "../lib/format";
 import { DEFAULT_LAUNCHER_PATH, type AppSettings } from "../lib/settings";
 
 interface SettingsScreenProps {
@@ -61,7 +62,7 @@ export function SettingsScreen({ version, appSettings, onUpdateAppSettings, upda
 }
 
 function UpdateSettingRow({ version, updater }: { version: string; updater: UpdaterState }) {
-  const { status, update, downloadProgress, isBusy, isUpdateAvailable, check, install } = updater;
+  const { status, update, downloadProgress, lastCheckedAt, isBusy, isUpdateAvailable, check, install } = updater;
   const latestVersion = update?.version ?? "";
 
   const onUpdateButtonClick = () => {
@@ -75,7 +76,7 @@ function UpdateSettingRow({ version, updater }: { version: string; updater: Upda
   const statusText: Record<UpdateStatus, string> = {
     idle: "Not checked yet",
     checking: "Checking for updates…",
-    latest: "You're on the latest version",
+    latest: "",
     available: `Version ${latestVersion} is available${update?.isSimulated ? " (simulated)" : ""}`,
     downloading: `Downloading version ${latestVersion}…`,
     installing: update?.isSimulated ? "Installing… (simulated)" : "Installing… Polaris will restart automatically",
@@ -109,17 +110,22 @@ function UpdateSettingRow({ version, updater }: { version: string; updater: Upda
   const releaseNotes = update?.body?.trim();
 
   return (
-    <div className="settings-row">
+    <div className="settings-row update-setting-row">
       <div className="settings-row-text">
         <span className="settings-row-title">Updates</span>
         <span className="settings-row-description">
           Current version <span className="settings-version">{version}</span>
         </span>
-        <span
-          className={`settings-update-status ${isUpdateAvailable || status === "downloading" || status === "installing" ? "is-available" : ""} ${isError ? "is-error" : ""}`}
-        >
-          {statusText[status]}
-        </span>
+        {statusText[status] && (
+          <span
+            className={`settings-update-status ${isUpdateAvailable || status === "downloading" || status === "installing" ? "is-available" : ""} ${isError ? "is-error" : ""}`}
+          >
+            {statusText[status]}
+          </span>
+        )}
+        {lastCheckedAt !== null && (
+          <span className="settings-update-last-checked">Last checked: {formatDateTime(lastCheckedAt)}</span>
+        )}
       </div>
       <button
         className={`update-button ${isUpdateAvailable ? "is-available" : ""} ${isBusy ? "is-busy" : ""}`}

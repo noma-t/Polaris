@@ -29,6 +29,8 @@ export function useUpdater({ isReady, simulate, onSimulatedInstallFinished }: Us
   const [update, setUpdate] = useState<AvailableUpdate | null>(null);
   /** download 進捗 (0〜1)。サイズ不明の場合は null */
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+  /** 最後にチェックが成功した日時 (epoch ms)。未チェック・失敗のみの場合は null */
+  const [lastCheckedAt, setLastCheckedAt] = useState<number | null>(null);
   /** 古いチェック結果で上書きしないよう、最後に開始したチェックを識別する */
   const checkIdRef = useRef(0);
   const onSimulatedInstallFinishedRef = useRef(onSimulatedInstallFinished);
@@ -45,6 +47,7 @@ export function useUpdater({ isReady, simulate, onSimulatedInstallFinished }: Us
       if (checkId !== checkIdRef.current) return;
       setUpdate(found);
       setStatus(found ? "available" : "latest");
+      setLastCheckedAt(Date.now());
     } catch {
       if (checkId !== checkIdRef.current) return;
       setUpdate(null);
@@ -75,7 +78,7 @@ export function useUpdater({ isReady, simulate, onSimulatedInstallFinished }: Us
     }
   }, []);
 
-  return { status, update, downloadProgress, isBusy, isUpdateAvailable, check, install };
+  return { status, update, downloadProgress, lastCheckedAt, isBusy, isUpdateAvailable, check, install };
 }
 
 export type UpdaterState = ReturnType<typeof useUpdater>;
