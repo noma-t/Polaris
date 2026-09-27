@@ -34,6 +34,13 @@ export function SettingsScreen({ version, appSettings, onUpdateAppSettings, upda
         onSave={(launcherPath) => saveAppSettings({ launcherPath }, "Failed to save the launch.exe path")}
         isLauncherFound={isLauncherFound}
       />
+      <ToggleSettingRow
+        title="Run in background"
+        description="Keep Polaris running in the system tray when the window is closed, so group instances keep being watched and the Created sort stays accurate."
+        isOn={appSettings?.runInBackground ?? false}
+        isDisabled={!appSettings}
+        onToggle={(runInBackground) => void saveAppSettings({ runInBackground }, "Failed to save Run in background")}
+      />
       <UpdateSettingRow version={version} updater={updater} />
       {isDeveloperModeVisible && (
         <ToggleSettingRow

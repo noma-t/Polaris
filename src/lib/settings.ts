@@ -24,6 +24,8 @@ export interface AppSettings {
   simulateUpdateAvailable: boolean;
   /** サムネイル撮影用に、実 Friends を隠してダミーの Friends を表示する (developerMode が有効な場合のみ効く) */
   thumbnailMode: boolean;
+  /** × でシステムトレイに格納し、ウィンドウを閉じている間もグループインスタンスの観測を続ける */
+  runInBackground: boolean;
 }
 
 export const DEFAULT_LAUNCHER_PATH = "C:/Program Files (x86)/Steam/steamapps/common/VRChat/launch.exe";
@@ -33,6 +35,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   developerMode: false,
   simulateUpdateAvailable: false,
   thumbnailMode: false,
+  runInBackground: false,
 };
 
 export const loadAppSettings = () => invoke<AppSettings>("settings_load_app");

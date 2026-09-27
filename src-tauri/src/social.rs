@@ -10,6 +10,7 @@ use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 
+use crate::background;
 use crate::pipeline::{self, PipelineEvent};
 use crate::vrchat_client::{AuthError, VrchatClient, FRIENDS_PAGE_SIZE};
 use crate::vrchat_models::{ApiFriend, ApiGroupInstance, ApiInstance};
@@ -24,6 +25,9 @@ const WORLD_FETCH_INTERVAL: Duration = Duration::from_secs(1);
 const WORLD_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// 429 を受けたときに World 名の取得を止める時間
 const RATE_LIMIT_PAUSE: Duration = Duration::from_secs(60);
+/// バックグラウンド中にグループインスタンスを取得する間隔 (フロントエンドの自動更新と揃える)
+const BACKGROUND_POLL_BASE: Duration = Duration::from_secs(60);
+const BACKGROUND_POLL_JITTER_MS: u64 = 15_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -499,6 +503,37 @@ impl Session {
         }
     }
 
+    /// 所属する全グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
+    async fn fetch_group_instances(&self) -> Result<Vec<GroupInstanceView>, AuthError> {
+        let list = match self.client.get_user_group_instances(&self.user_id).await {
+            Ok(list) => list,
+            Err(error) => {
+                self.handle_error(&error);
+                return Err(error);
+            }
+        };
+        self.with_store(|store| store.apply_group_instances(list.instances, now_epoch_ms()))
+            .ok_or(AuthError::Unauthorized)
+    }
+
+    /// Run in background でウィンドウが見えていない間、グループインスタンスを定期取得して初めて観測した時刻を記録し続ける
+    async fn run_background_group_poll(self) {
+        loop {
+            // 乱数 crate を増やさないよう、現在時刻の端数を jitter に使う
+            let jitter_ms = u64::from(SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.subsec_nanos())) % BACKGROUND_POLL_JITTER_MS;
+            tokio::time::sleep(BACKGROUND_POLL_BASE + Duration::from_millis(jitter_ms)).await;
+            if !background::should_poll_in_background(&self.app) {
+                continue;
+            }
+            match self.fetch_group_instances().await {
+                Ok(_) => {}
+                Err(AuthError::RateLimited) => tokio::time::sleep(RATE_LIMIT_PAUSE).await,
+                Err(AuthError::Unauthorized) => return,
+                Err(_) => {}
+            }
+        }
+    }
+
     async fn run_world_queue(self) {
         let mut interval = tokio::time::interval(WORLD_FETCH_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -534,7 +569,7 @@ impl SocialState {
         Self { store: Arc::default(), tasks: Mutex::default(), session: Mutex::default() }
     }
 
-    /// ログイン完了時に呼ぶ。初期同期・pipeline・World 名取得のタスクを起動する
+    /// ログイン完了時に呼ぶ。初期同期・pipeline・World 名取得・バックグラウンド中の定期取得のタスクを起動する
     pub fn start(&self, app: AppHandle, client: VrchatClient, user_id: String) {
         self.stop();
         let generation = self.store.lock().expect("social store poisoned").generation;
@@ -548,6 +583,7 @@ impl SocialState {
             }),
             tauri::async_runtime::spawn(session.clone().run_pipeline()),
             tauri::async_runtime::spawn(session.clone().run_world_queue()),
+            tauri::async_runtime::spawn(session.clone().run_background_group_poll()),
         ];
         *self.tasks.lock().expect("social tasks poisoned") = tasks;
         *self.session.lock().expect("social session poisoned") = Some(session);
@@ -575,16 +611,7 @@ impl SocialState {
     /// 所属する全グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
     pub async fn fetch_group_instances(&self) -> Result<Vec<GroupInstanceView>, AuthError> {
         let session = self.session.lock().expect("social session poisoned").clone().ok_or(AuthError::Unauthorized)?;
-        let list = match session.client.get_user_group_instances(&session.user_id).await {
-            Ok(list) => list,
-            Err(error) => {
-                session.handle_error(&error);
-                return Err(error);
-            }
-        };
-        session
-            .with_store(|store| store.apply_group_instances(list.instances, now_epoch_ms()))
-            .ok_or(AuthError::Unauthorized)
+        session.fetch_group_instances().await
     }
 
     /// 指定した 1 グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
