@@ -11,7 +11,10 @@ use reqwest::{
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::vrchat_models::{ApiFriend, ApiGroupInstance, ApiGroupInstanceList, ApiUserGroup, ApiWorld};
+use crate::game_monitor::is_valid_instance_location;
+use crate::vrchat_models::{
+    ApiFriend, ApiGroupInstance, ApiGroupInstanceList, ApiGroupName, ApiInstanceDetail, ApiUserGroup, ApiUserName, ApiWorld,
+};
 
 const API_BASE: &str = "https://api.vrchat.cloud/api/1";
 /// VRChat API は識別可能な User-Agent を必須としている
@@ -257,6 +260,23 @@ impl VrchatClient {
     /// 指定した 1 グループのインスタンスを取得する
     pub async fn get_group_instances(&self, group_id: &str) -> Result<Vec<ApiGroupInstance>, AuthError> {
         self.get_json(Self::api_url(&format!("/groups/{}/instances", urlencoding::encode(group_id)))).await
+    }
+
+    /// 1 インスタンスの詳細 (人数・定員・World) を取得する
+    pub async fn get_instance(&self, location: &str) -> Result<ApiInstanceDetail, AuthError> {
+        // location の `:` `~` `()` は VRChat がそのまま受け付ける形なので、パスに入れて問題ない文字だけか確かめて埋め込む
+        if !is_valid_instance_location(location) {
+            return Err(AuthError::Unexpected(format!("Invalid instance location: {location}")));
+        }
+        self.get_json(Self::api_url(&format!("/instances/{location}"))).await
+    }
+
+    pub async fn get_user(&self, user_id: &str) -> Result<ApiUserName, AuthError> {
+        self.get_json(Self::api_url(&format!("/users/{}", urlencoding::encode(user_id)))).await
+    }
+
+    pub async fn get_group(&self, group_id: &str) -> Result<ApiGroupName, AuthError> {
+        self.get_json(Self::api_url(&format!("/groups/{}", urlencoding::encode(group_id)))).await
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(&self, url: Url) -> Result<T, AuthError> {

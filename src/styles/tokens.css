@@ -5,6 +5,8 @@
   --color-input-bg: oklch(0.13 0.005 250);
   --color-card: oklch(0.22 0.006 250);
   --color-card-open: oklch(0.2 0.006 250);
+  /* Friends 欄でインライン展開した詳細部分 */
+  --color-card-detail: oklch(0.19 0.006 250);
   --color-raised: oklch(0.27 0.008 250);
   --color-hover: oklch(0.2 0.006 250);
   --color-menu: oklch(0.18 0.006 250);

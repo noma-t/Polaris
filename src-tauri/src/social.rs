@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use crate::background;
 use crate::pipeline::{self, PipelineEvent};
 use crate::vrchat_client::{AuthError, VrchatClient, FRIENDS_PAGE_SIZE};
-use crate::vrchat_models::{ApiFriend, ApiGroupInstance, ApiInstance};
+use crate::vrchat_models::{ApiFriend, ApiGroupInstance, ApiInstance, ApiInstanceDetail};
 
 pub const FRIENDS_UPDATED_EVENT: &str = "social://friends-updated";
 pub const GROUPS_UPDATED_EVENT: &str = "social://groups-updated";
@@ -94,6 +94,7 @@ struct FriendEntry {
     name: String,
     /// ユーザーが選んでいる status。オフライン中も保持し、表示時に Offline へ置き換える
     status: FriendStatus,
+    status_message: String,
     location: FriendLocation,
 }
 
@@ -103,6 +104,7 @@ impl FriendEntry {
             id: user.id.clone(),
             name: user.display_name.clone(),
             status: FriendStatus::from_api(&user.status),
+            status_message: user.status_description.clone(),
             location,
         }
     }
@@ -112,8 +114,10 @@ impl FriendEntry {
         if !user.display_name.is_empty() {
             self.name = user.display_name.clone();
         }
+        // status を含む `user` はプロフィール全体なので、空のステータスメッセージも「未設定」として反映する
         if !user.status.is_empty() {
             self.status = FriendStatus::from_api(&user.status);
+            self.status_message = user.status_description.clone();
         }
     }
 }
@@ -124,6 +128,7 @@ pub struct FriendView {
     id: String,
     name: String,
     status: FriendStatus,
+    status_message: String,
     location_kind: &'static str,
     /// locationKind が world のときのみ。`wrld_…:…` 形式
     location: Option<String>,
@@ -155,6 +160,53 @@ pub struct GroupInstanceView {
     first_seen_at: i64,
     /// Created ソート用の値。大きいほど新しい
     created_order: u32,
+}
+
+/// フレンドがいるインスタンス 1 件分の詳細表示用データ
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceDetailView {
+    /// `wrld_…:…` 形式の location
+    location: String,
+    world_name: String,
+    thumbnail_url: Option<String>,
+    /// `"public"` / `"friendsPlus"` / `"friends"` / `"invitePlus"` / `"invite"` / `"groupPublic"` / `"groupPlus"` / `"group"`
+    instance_type: &'static str,
+    /// インスタンスを立てた group / user の名前。Public や解決できなかったときは None
+    host_name: Option<String>,
+    user_count: u32,
+    capacity: u32,
+}
+
+/// インスタンスを立てた側
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InstanceHost {
+    Group(String),
+    User(String),
+}
+
+/// location の `~…` 部分からインスタンス種別とホストを読み取る
+fn instance_type_from_location(location: &str) -> (&'static str, Option<InstanceHost>) {
+    if let Some(group_id) = location_param(location, "group") {
+        let instance_type = match location_param(location, "groupAccessType") {
+            Some("public") => "groupPublic",
+            Some("plus") => "groupPlus",
+            _ => "group",
+        };
+        return (instance_type, Some(InstanceHost::Group(group_id.to_owned())));
+    }
+    let user_host = |id: &str| Some(InstanceHost::User(id.to_owned()));
+    if let Some(user_id) = location_param(location, "hidden") {
+        return ("friendsPlus", user_host(user_id));
+    }
+    if let Some(user_id) = location_param(location, "friends") {
+        return ("friends", user_host(user_id));
+    }
+    if let Some(user_id) = location_param(location, "private") {
+        let can_request_invite = location.split('~').skip(1).any(|part| part == "canRequestInvite");
+        return (if can_request_invite { "invitePlus" } else { "invite" }, user_host(user_id));
+    }
+    ("public", None)
 }
 
 /// 観測済みのグループインスタンスについて、取得をまたいで保持する値
@@ -202,6 +254,8 @@ struct SocialStore {
     world_names: HashMap<String, String>,
     world_retry_at: HashMap<String, Instant>,
     groups: Vec<GroupView>,
+    /// インスタンスのホスト (group / user) の ID → 名前。所属グループ・friend 以外を API で引いた分
+    host_names: HashMap<String, String>,
     /// グループインスタンスの location → 観測済みの値
     instance_seen: HashMap<String, SeenInstance>,
     /// 次に初めて見るグループインスタンスに振る Created ソート用の値
@@ -222,6 +276,7 @@ impl SocialStore {
                     id: friend.id.clone(),
                     name: friend.name.clone(),
                     status: if friend.location == FriendLocation::Offline { FriendStatus::Offline } else { friend.status },
+                    status_message: friend.status_message.clone(),
                     location_kind: friend.location.kind(),
                     location,
                     is_world_loading: is_in_world && world_name.is_none() && self.pinned.contains(&friend.id),
@@ -271,6 +326,18 @@ impl SocialStore {
         } else if let Some(user) = user.filter(|u| u.id == user_id) {
             self.friends.insert(user_id.to_owned(), FriendEntry::from_api(user, location));
         }
+    }
+
+    /// 所属グループ・friend・取得済みのキャッシュからホスト名を引く
+    fn known_host_name(&self, host: &InstanceHost) -> Option<String> {
+        match host {
+            InstanceHost::Group(id) => self.groups.iter().find(|g| &g.id == id).map(|g| g.name.clone()),
+            InstanceHost::User(id) => self.friends.get(id).map(|f| f.name.clone()),
+        }
+        .or_else(|| {
+            let (InstanceHost::Group(id) | InstanceHost::User(id)) = host;
+            self.host_names.get(id).cloned()
+        })
     }
 
     /// 全グループ分のインスタンスから表示用データを作る。
@@ -516,6 +583,54 @@ impl Session {
             .ok_or(AuthError::Unauthorized)
     }
 
+    /// フレンドがいるインスタンスの詳細を取得する。ホスト名は既知のデータに無ければ API で引く
+    async fn fetch_instance_detail(&self, location: &str) -> Result<InstanceDetailView, AuthError> {
+        let detail: ApiInstanceDetail = match self.client.get_instance(location).await {
+            Ok(detail) => detail,
+            Err(error) => {
+                self.handle_error(&error);
+                return Err(error);
+            }
+        };
+        let (instance_type, host) = instance_type_from_location(location);
+        let host_name = match host {
+            Some(host) => match self.with_store(|store| store.known_host_name(&host)).ok_or(AuthError::Unauthorized)? {
+                Some(name) => Some(name),
+                None => self.fetch_host_name(&host).await,
+            },
+            None => None,
+        };
+        let world = detail.world;
+        Ok(InstanceDetailView {
+            location: location.to_owned(),
+            world_name: world.name,
+            thumbnail_url: Some(world.thumbnail_image_url).filter(|url| !url.is_empty()),
+            instance_type,
+            host_name,
+            user_count: detail.user_count,
+            capacity: detail.capacity,
+        })
+    }
+
+    /// ホスト名を API で引いてキャッシュする。取得できなくても詳細は表示したいので、失敗は None として扱う
+    async fn fetch_host_name(&self, host: &InstanceHost) -> Option<String> {
+        let (id, result) = match host {
+            InstanceHost::Group(id) => (id, self.client.get_group(id).await.map(|g| g.name)),
+            InstanceHost::User(id) => (id, self.client.get_user(id).await.map(|u| u.display_name)),
+        };
+        match result {
+            Ok(name) if !name.is_empty() => {
+                self.with_store(|store| store.host_names.insert(id.clone(), name.clone()));
+                Some(name)
+            }
+            Ok(_) => None,
+            Err(error) => {
+                self.handle_error(&error);
+                None
+            }
+        }
+    }
+
     /// Run in background でウィンドウが見えていない間、グループインスタンスを定期取得して初めて観測した時刻を記録し続ける
     async fn run_background_group_poll(self) {
         loop {
@@ -629,6 +744,12 @@ impl SocialState {
             .ok_or(AuthError::Unauthorized)
     }
 
+    /// フレンドがいるインスタンスの詳細を取得する
+    pub async fn fetch_instance_detail(&self, location: &str) -> Result<InstanceDetailView, AuthError> {
+        let session = self.session.lock().expect("social session poisoned").clone().ok_or(AuthError::Unauthorized)?;
+        session.fetch_instance_detail(location).await
+    }
+
     /// pinned を置き換え、`is_world_loading` が変わるので snapshot を返す
     pub fn set_pinned(&self, ids: Vec<String>) -> Vec<FriendView> {
         let mut store = self.store.lock().expect("social store poisoned");
@@ -643,7 +764,13 @@ mod tests {
     use crate::vrchat_models::{ApiGroupInstanceWorld, ApiWorld};
 
     fn api_friend(id: &str, status: &str, location: &str) -> ApiFriend {
-        ApiFriend { id: id.into(), display_name: id.to_uppercase(), status: status.into(), location: location.into() }
+        ApiFriend {
+            id: id.into(),
+            display_name: id.to_uppercase(),
+            status: status.into(),
+            location: location.into(),
+            status_description: String::new(),
+        }
     }
 
     fn view<'a>(views: &'a [FriendView], id: &str) -> &'a FriendView {
@@ -688,7 +815,7 @@ mod tests {
             user_id: "a".into(),
             location: "wrld_y:2".into(),
             user: None,
-            world: Some(ApiWorld { id: "wrld_y".into(), name: "Rainy Window".into() }),
+            world: Some(ApiWorld { id: "wrld_y".into(), name: "Rainy Window".into(), ..ApiWorld::default() }),
         });
         let views = store.friend_views();
         assert_eq!(view(&views, "a").world_name.as_deref(), Some("Rainy Window"));
@@ -704,6 +831,62 @@ mod tests {
         assert!(store.pinned.is_empty());
     }
 
+    #[test]
+    fn updates_status_message_from_full_profile_only() {
+        let mut store = SocialStore::default();
+        let mut user = api_friend("a", "active", "wrld_x:1");
+        user.status_description = "おやすみ".into();
+        store.replace_friends(vec![user.clone()], vec![]);
+        assert_eq!(view(&store.friend_views(), "a").status_message, "おやすみ");
+
+        // status を含まない `user` ではステータスメッセージを変えない
+        let partial = ApiFriend { status: String::new(), ..api_friend("a", "", "") };
+        store.apply(&PipelineEvent::FriendUpdate { user_id: "a".into(), user: partial });
+        assert_eq!(view(&store.friend_views(), "a").status_message, "おやすみ");
+
+        user.status_description = String::new();
+        store.apply(&PipelineEvent::FriendUpdate { user_id: "a".into(), user });
+        assert_eq!(view(&store.friend_views(), "a").status_message, "");
+    }
+
+    #[test]
+    fn parses_instance_types() {
+        let group = |id: &str| Some(InstanceHost::Group(id.into()));
+        let user = |id: &str| Some(InstanceHost::User(id.into()));
+        assert_eq!(instance_type_from_location("wrld_a:1~region(jp)"), ("public", None));
+        assert_eq!(instance_type_from_location("wrld_a:1~hidden(usr_1)~region(jp)"), ("friendsPlus", user("usr_1")));
+        assert_eq!(instance_type_from_location("wrld_a:1~friends(usr_1)~region(jp)"), ("friends", user("usr_1")));
+        assert_eq!(
+            instance_type_from_location("wrld_a:1~private(usr_1)~canRequestInvite~region(us)"),
+            ("invitePlus", user("usr_1"))
+        );
+        assert_eq!(instance_type_from_location("wrld_a:1~private(usr_1)~region(us)"), ("invite", user("usr_1")));
+        assert_eq!(
+            instance_type_from_location("wrld_a:1~group(grp_1)~groupAccessType(public)~region(jp)"),
+            ("groupPublic", group("grp_1"))
+        );
+        assert_eq!(
+            instance_type_from_location("wrld_a:1~group(grp_1)~groupAccessType(plus)"),
+            ("groupPlus", group("grp_1"))
+        );
+        assert_eq!(
+            instance_type_from_location("wrld_a:1~group(grp_1)~groupAccessType(members)"),
+            ("group", group("grp_1"))
+        );
+    }
+
+    #[test]
+    fn resolves_known_host_names() {
+        let mut store = SocialStore::default();
+        store.replace_friends(vec![api_friend("usr_1", "active", "wrld_x:1")], vec![]);
+        store.groups = vec![GroupView { id: "grp_1".into(), name: "寝落ち図書館".into() }];
+        store.host_names.insert("usr_2".into(), "あおい".into());
+        assert_eq!(store.known_host_name(&InstanceHost::Group("grp_1".into())).as_deref(), Some("寝落ち図書館"));
+        assert_eq!(store.known_host_name(&InstanceHost::User("usr_1".into())).as_deref(), Some("USR_1"));
+        assert_eq!(store.known_host_name(&InstanceHost::User("usr_2".into())).as_deref(), Some("あおい"));
+        assert_eq!(store.known_host_name(&InstanceHost::Group("grp_9".into())), None);
+    }
+
     fn api_instance(location: &str, access_type: &str) -> ApiInstance {
         ApiInstance {
             location: location.into(),
@@ -711,7 +894,7 @@ mod tests {
             user_count: 3,
             capacity: 16,
             group_access_type: access_type.into(),
-            world: ApiWorld { id: "wrld_a".into(), name: "Quiet Shore".into() },
+            world: ApiWorld { id: "wrld_a".into(), name: "Quiet Shore".into(), ..ApiWorld::default() },
         }
     }
 

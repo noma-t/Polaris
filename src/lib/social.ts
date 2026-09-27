@@ -9,6 +9,8 @@ export interface Friend {
   id: string;
   name: string;
   status: FriendStatus;
+  /** ユーザーが設定しているステータスメッセージ。未設定なら空文字 */
+  statusMessage: string;
   locationKind: FriendLocationKind;
   /** locationKind が world のときのみ。`wrld_…:…` 形式 */
   location: string | null;
@@ -40,10 +42,38 @@ export interface GroupInstance {
   createdOrder: number;
 }
 
+export type InstanceType = "public" | "friendsPlus" | "friends" | "invitePlus" | "invite" | "groupPublic" | "groupPlus" | "group";
+
+export const INSTANCE_TYPE_LABELS: Record<InstanceType, string> = {
+  public: "Public",
+  friendsPlus: "Friends+",
+  friends: "Friends",
+  invitePlus: "Invite+",
+  invite: "Invite",
+  groupPublic: "Group Public",
+  groupPlus: "Group+",
+  group: "Group",
+};
+
+/** フレンドがいるインスタンス 1 件分の詳細 */
+export interface InstanceDetail {
+  /** `wrld_…:…` 形式の location */
+  location: string;
+  worldName: string;
+  /** World のサムネイル画像の元 URL (VRChat 側)。無ければ null */
+  thumbnailUrl: string | null;
+  instanceType: InstanceType;
+  /** インスタンスを立てた group / user の名前。Public や解決できなかったときは null */
+  hostName: string | null;
+  userCount: number;
+  capacity: number;
+}
+
 export const getFriends = () => invoke<Friend[]>("social_get_friends");
 export const getGroups = () => invoke<Group[]>("social_get_groups");
 export const getGroupInstances = () => invoke<GroupInstance[]>("social_get_group_instances");
 export const getInstancesOfGroup = (groupId: string) => invoke<GroupInstance[]>("social_get_instances_of_group", { groupId });
+export const getInstanceDetail = (location: string) => invoke<InstanceDetail>("social_get_instance_detail", { location });
 export const setPinnedFriends = (ids: string[]) => invoke<void>("social_set_pinned_friends", { ids });
 
 export const onFriendsUpdated = (handler: (friends: Friend[]) => void): Promise<UnlistenFn> =>

@@ -2,7 +2,7 @@
 
 use tauri::{AppHandle, Emitter, State};
 
-use crate::social::{FriendView, GroupInstanceView, GroupView, SocialState, FRIENDS_UPDATED_EVENT};
+use crate::social::{FriendView, GroupInstanceView, GroupView, InstanceDetailView, SocialState, FRIENDS_UPDATED_EVENT};
 use crate::vrchat_client::AuthError;
 
 /// listen 開始前に emit された分を取りこぼさないよう、初期表示時に現在の snapshot を返す
@@ -29,6 +29,15 @@ pub async fn social_get_instances_of_group(
     group_id: String,
 ) -> Result<Vec<GroupInstanceView>, AuthError> {
     state.fetch_instances_of_group(&group_id).await
+}
+
+/// フレンドがいるインスタンスの詳細を VRChat API から取得する
+#[tauri::command]
+pub async fn social_get_instance_detail(
+    state: State<'_, SocialState>,
+    location: String,
+) -> Result<InstanceDetailView, AuthError> {
+    state.fetch_instance_detail(&location).await
 }
 
 /// pinned friend を置き換える。World 名の取得対象と `isWorldLoading` が変わるので snapshot を送り直す

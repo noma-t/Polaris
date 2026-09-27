@@ -1,4 +1,4 @@
-import type { Friend } from "../lib/social";
+import type { Friend, InstanceDetail } from "../lib/social";
 
 /** ダミー Friend の id 接頭辞。実データの id (`usr_…`) と衝突させず、ダミーかどうかの判定にも使う */
 const DUMMY_ID_PREFIX = "dummy_";
@@ -17,8 +17,15 @@ const instance = (worldKey: string, instanceId: string, region: "jp" | "us" | "e
   `wrld_${DUMMY_ID_PREFIX}${worldKey}:${instanceId}~region(${region})`;
 
 /** インスタンス内の Friend。VRChat では Ask Me / Do Not Disturb だと location が非公開になるため Join Me / Online のみ */
-const inWorld = (name: string, status: "join" | "online", location: string, worldName: string, isPinned = true): DummyFriend => ({
-  friend: { id: dummyId(), name, status, locationKind: "world", location, worldName, isWorldLoading: false },
+const inWorld = (
+  name: string,
+  status: "join" | "online",
+  location: string,
+  worldName: string,
+  isPinned = true,
+  statusMessage = "",
+): DummyFriend => ({
+  friend: { id: dummyId(), name, status, statusMessage, locationKind: "world", location, worldName, isWorldLoading: false },
   isPinned,
 });
 
@@ -34,6 +41,7 @@ const elsewhere = (
     name,
     // オフライン中は選んでいる status に関わらず Offline 表示になる (Rust 側と同じ扱い)
     status: locationKind === "offline" ? "offline" : status,
+    statusMessage: "",
     locationKind,
     location: null,
     worldName: null,
@@ -52,12 +60,12 @@ const AQUARIUM = instance("aquarium", "80361~friends(usr_dummy)");
 
 const DUMMY_FRIENDS: DummyFriend[] = [
   // インスタンス内 (同じワールドに複数人いるケースも含める)
-  inWorld("あおい", "join", ENGAWA, "夜の縁側 - Night Engawa"),
+  inWorld("あおい", "join", ENGAWA, "夜の縁側 - Night Engawa", true, "誰でもどうぞ〜"),
   inWorld("Haru_VR", "online", ENGAWA, "夜の縁側 - Night Engawa"),
   inWorld("みお*", "join", ENGAWA, "夜の縁側 - Night Engawa", false),
   inWorld("Tsubasa.exe", "online", ROOFTOP, "Cozy Rooftop Bar"),
   inWorld("りんりん", "online", ROOFTOP, "Cozy Rooftop Bar"),
-  inWorld("Akari☆", "join", OBSERVATORY, "星見の丘の天文台"),
+  inWorld("Akari☆", "join", OBSERVATORY, "星見の丘の天文台", true, "今日は早めに寝ます"),
   inWorld("しゅん", "online", IZAKAYA, "居酒屋ぽんぽこ"),
   inWorld("Nagi", "online", IZAKAYA, "居酒屋ぽんぽこ", false),
   inWorld("Ryo_Ryo", "join", DRIVE, "Midnight Highway Drive"),
@@ -94,5 +102,24 @@ export const THUMBNAIL_FRIENDS: Friend[] = DUMMY_FRIENDS.map((d) => d.friend);
 export const THUMBNAIL_PINNED_IDS: Record<string, boolean> = Object.fromEntries(
   DUMMY_FRIENDS.filter((d) => d.isPinned).map((d) => [d.friend.id, true]),
 );
+
+/** ダミーインスタンスの詳細 (Thumbnail mode で展開したときに API の代わりに使う) */
+const DUMMY_INSTANCE_DETAILS: Record<string, Omit<InstanceDetail, "location" | "worldName" | "thumbnailUrl">> = {
+  [ENGAWA]: { instanceType: "public", hostName: null, userCount: 9, capacity: 24 },
+  [ROOFTOP]: { instanceType: "friends", hostName: "Tsubasa.exe", userCount: 6, capacity: 16 },
+  [OBSERVATORY]: { instanceType: "public", hostName: null, userCount: 32, capacity: 32 },
+  [IZAKAYA]: { instanceType: "friendsPlus", hostName: "しゅん", userCount: 11, capacity: 20 },
+  [DRIVE]: { instanceType: "public", hostName: null, userCount: 4, capacity: 12 },
+  [CLASSROOM]: { instanceType: "public", hostName: null, userCount: 15, capacity: 30 },
+  [AQUARIUM]: { instanceType: "friends", hostName: "Miyu", userCount: 3, capacity: 16 },
+};
+
+/** ダミーインスタンスの詳細。ダミーでない location なら null */
+export const getDummyInstanceDetail = (location: string): InstanceDetail | null => {
+  const detail = DUMMY_INSTANCE_DETAILS[location];
+  const friend = THUMBNAIL_FRIENDS.find((f) => f.location === location);
+  if (!detail || !friend?.worldName) return null;
+  return { ...detail, location, worldName: friend.worldName, thumbnailUrl: null };
+};
 
 export const isDummyLocation = (location: string) => location.startsWith(`wrld_${DUMMY_ID_PREFIX}`);
