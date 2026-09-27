@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -140,16 +140,19 @@ fn read_file(path: &PathBuf) -> SettingsFile {
         .unwrap_or_default()
 }
 
+fn write_file(path: &Path, file: &SettingsFile) -> Result<(), AuthError> {
+    write_json(path, file).map_err(|err| AuthError::Unexpected(format!("Failed to save settings: {err}")))
+}
+
 /// 書き込み途中で落ちても元のファイルが壊れないよう、一時ファイルに書いてから置き換える
-fn write_file(path: &PathBuf, file: &SettingsFile) -> Result<(), AuthError> {
-    let to_error = |err: std::io::Error| AuthError::Unexpected(format!("Failed to save settings: {err}"));
+pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(to_error)?;
+        fs::create_dir_all(dir)?;
     }
-    let text = serde_json::to_string_pretty(file).map_err(|err| AuthError::Unexpected(err.to_string()))?;
+    let text = serde_json::to_string_pretty(value)?;
     let temp_path = path.with_extension("json.tmp");
-    fs::write(&temp_path, text).map_err(to_error)?;
-    fs::rename(&temp_path, path).map_err(to_error)
+    fs::write(&temp_path, text)?;
+    fs::rename(&temp_path, path)
 }
 
 /// 起動時に保存済みの launch.exe パスを読み込む

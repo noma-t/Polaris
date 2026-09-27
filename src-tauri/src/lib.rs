@@ -3,6 +3,7 @@ mod background;
 mod credential_store;
 mod game_monitor;
 mod image_protocol;
+mod instance_store;
 mod pipeline;
 mod settings_store;
 mod social;

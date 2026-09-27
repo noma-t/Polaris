@@ -6,12 +6,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::TimeZone;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 
 use crate::background;
+use crate::instance_store;
 use crate::pipeline::{self, PipelineEvent};
 use crate::vrchat_client::{AuthError, VrchatClient, FRIENDS_PAGE_SIZE};
 use crate::vrchat_models::{ApiFriend, ApiGroupInstance, ApiInstance, ApiInstanceDetail};
@@ -221,12 +222,14 @@ fn instance_type_from_location(location: &str) -> (&'static str, Option<Instance
 }
 
 /// 観測済みのグループインスタンスについて、取得をまたいで保持する値
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct SeenInstance {
+/// アプリを終了しても引き継げるよう instance_store で保存する
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SeenInstance {
     /// 初めて観測した時刻 (epoch ms)
-    first_seen_at: i64,
+    pub(crate) first_seen_at: i64,
     /// 初めて観測したときに振った Created ソート用の値。以降の取得では変えない
-    created_order: u32,
+    pub(crate) created_order: u32,
 }
 
 fn group_access_type_from_api(access_type: &str) -> &'static str {
@@ -670,8 +673,18 @@ impl Session {
             ),
             None => eprintln!("[group-instances] fetchedAt={:?} (unparsed; using local time, next in {next_in:.1}s)", list.fetched_at),
         }
-        self.with_store(|store| GroupInstanceListView { fetched_at, instances: store.apply_group_instances(list.instances, now_ms) })
-            .ok_or(AuthError::Unauthorized)
+        let view = self
+            .with_store(|store| GroupInstanceListView { fetched_at, instances: store.apply_group_instances(list.instances, now_ms) })
+            .ok_or(AuthError::Unauthorized)?;
+        self.persist_instance_seen();
+        Ok(view)
+    }
+
+    /// 観測済みのグループインスタンスの記録を保存する。ファイル書き込みは store のロック外で行う
+    fn persist_instance_seen(&self) {
+        if let Some((seen, next_created_order)) = self.with_store(|store| (store.instance_seen.clone(), store.next_created_order)) {
+            instance_store::save(&self.app, &self.user_id, seen, next_created_order);
+        }
     }
 
     /// フレンドがいるインスタンスの詳細を取得する。ホスト名は既知のデータに無ければ API で引く
@@ -776,10 +789,17 @@ impl SocialState {
         Self { store: Arc::default(), tasks: Mutex::default(), session: Mutex::default() }
     }
 
-    /// ログイン完了時に呼ぶ。初期同期・pipeline・World 名取得・バックグラウンド中の定期取得のタスクを起動する
+    /// ログイン完了時に呼ぶ。保存済みのグループインスタンスの観測記録を復元し、
+    /// 初期同期・pipeline・World 名取得・バックグラウンド中の定期取得のタスクを起動する
     pub fn start(&self, app: AppHandle, client: VrchatClient, user_id: String) {
         self.stop();
-        let generation = self.store.lock().expect("social store poisoned").generation;
+        let (instance_seen, next_created_order) = instance_store::load(&app, &user_id);
+        let generation = {
+            let mut store = self.store.lock().expect("social store poisoned");
+            store.instance_seen = instance_seen;
+            store.next_created_order = next_created_order;
+            store.generation
+        };
         let session = Session { app, client, user_id, store: self.store.clone(), generation };
 
         let initial_sync = session.clone();
@@ -831,9 +851,11 @@ impl SocialState {
                 return Err(error);
             }
         };
-        session
+        let views = session
             .with_store(|store| store.apply_instances_of_group(group_id, instances, now_epoch_ms()))
-            .ok_or(AuthError::Unauthorized)
+            .ok_or(AuthError::Unauthorized)?;
+        session.persist_instance_seen();
+        Ok(views)
     }
 
     /// フレンドがいるインスタンスの詳細を取得する
@@ -1005,6 +1027,19 @@ mod tests {
         // 既知の wrld_a:2 は初回の値のまま、初めて見る wrld_a:3 だけ既存より新しい値になる
         assert_eq!(views.iter().map(|v| v.created_order).collect::<Vec<_>>(), [2, 3]);
         assert!(!store.instance_seen.contains_key("wrld_a:1"));
+    }
+
+    #[test]
+    fn keeps_restored_first_seen_time_after_restart() {
+        // 前回起動時に保存した記録を復元した状態
+        let mut store = SocialStore {
+            instance_seen: HashMap::from([("wrld_a:1".to_owned(), SeenInstance { first_seen_at: 100, created_order: 5 })]),
+            next_created_order: 5,
+            ..SocialStore::default()
+        };
+        let views = store.apply_group_instances(vec![api_instance("wrld_a:1", "public"), api_instance("wrld_a:2", "public")], 900);
+        assert_eq!((views[0].first_seen_at, views[0].created_order), (100, 5));
+        assert_eq!((views[1].first_seen_at, views[1].created_order), (900, 6));
     }
 
     #[test]
