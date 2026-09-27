@@ -12,6 +12,8 @@ pub struct ApiFriend {
     pub status: String,
     /// `"offline"` / `"private"` / `"traveling"` / `"wrld_…:…"`。pipeline の `user` には含まれない
     pub location: String,
+    /// ユーザーが設定しているステータスメッセージ
+    pub status_description: String,
 }
 
 /// `GET /worlds/{id}` のレスポンス。pipeline `friend-location` の `world` もこの形で受ける
@@ -19,6 +21,31 @@ pub struct ApiFriend {
 #[serde(rename_all = "camelCase", default)]
 pub struct ApiWorld {
     pub id: String,
+    pub name: String,
+    pub thumbnail_image_url: String,
+}
+
+/// `GET /instances/{worldId}:{instanceId}` のレスポンスのうち詳細表示に使うフィールド
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ApiInstanceDetail {
+    pub location: String,
+    pub user_count: u32,
+    pub capacity: u32,
+    pub world: ApiWorld,
+}
+
+/// `GET /users/{id}` のうちインスタンスのホスト名表示に使うフィールド
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ApiUserName {
+    pub display_name: String,
+}
+
+/// `GET /groups/{id}` のうちインスタンスのホスト名表示に使うフィールド
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ApiGroupName {
     pub name: String,
 }
 
@@ -35,6 +62,8 @@ pub struct ApiUserGroup {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ApiGroupInstanceList {
+    /// VRChat 側でこの一覧が取得された時刻 (RFC 3339)
+    pub fetched_at: String,
     pub instances: Vec<ApiInstance>,
 }
 

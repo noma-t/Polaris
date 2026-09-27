@@ -160,3 +160,21 @@ export const ExternalLinkIcon = (p: IconProps) => (
     <line x1="11" y1="13" x2="20" y2="4" />
   </StrokeIcon>
 );
+
+export const RefreshIcon = (p: IconProps) => (
+  <StrokeIcon {...p} strokeWidth={2}>
+    <path d="M4 11a8 8 0 0 1 14.3-4.3" />
+    <polyline points="19 3 19 7.5 14.5 7.5" />
+    <path d="M20 13a8 8 0 0 1-14.3 4.3" />
+    <polyline points="5 21 5 16.5 9.5 16.5" />
+  </StrokeIcon>
+);
+
+export const UsersIcon = (p: IconProps) => (
+  <StrokeIcon {...p}>
+    <circle cx="9" cy="8" r="3.2" />
+    <path d="M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" />
+    <circle cx="17" cy="9" r="2.4" />
+    <path d="M16.5 13.6c2.6.2 4.5 2.1 4.5 4.9" />
+  </StrokeIcon>
+);

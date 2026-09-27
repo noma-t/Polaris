@@ -5,14 +5,16 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::TimeZone;
 use serde::Serialize;
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 
+use crate::background;
 use crate::pipeline::{self, PipelineEvent};
 use crate::vrchat_client::{AuthError, VrchatClient, FRIENDS_PAGE_SIZE};
-use crate::vrchat_models::{ApiFriend, ApiGroupInstance, ApiInstance};
+use crate::vrchat_models::{ApiFriend, ApiGroupInstance, ApiInstance, ApiInstanceDetail};
 
 pub const FRIENDS_UPDATED_EVENT: &str = "social://friends-updated";
 pub const GROUPS_UPDATED_EVENT: &str = "social://groups-updated";
@@ -24,6 +26,10 @@ const WORLD_FETCH_INTERVAL: Duration = Duration::from_secs(1);
 const WORLD_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// 429 を受けたときに World 名の取得を止める時間
 const RATE_LIMIT_PAUSE: Duration = Duration::from_secs(60);
+/// fetchedAt から次にグループインスタンスを全体取得するまでの間隔 (フロントエンドの自動更新と揃える)
+const GROUP_INSTANCES_REFRESH_INTERVAL: Duration = Duration::from_secs(90);
+/// 端末と VRChat の時計のずれで fetchedAt + 間隔 が過ぎていても、連続取得しないよう最低限空ける時間
+const GROUP_INSTANCES_MIN_REFRESH_DELAY: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +96,7 @@ struct FriendEntry {
     name: String,
     /// ユーザーが選んでいる status。オフライン中も保持し、表示時に Offline へ置き換える
     status: FriendStatus,
+    status_message: String,
     location: FriendLocation,
 }
 
@@ -99,6 +106,7 @@ impl FriendEntry {
             id: user.id.clone(),
             name: user.display_name.clone(),
             status: FriendStatus::from_api(&user.status),
+            status_message: user.status_description.clone(),
             location,
         }
     }
@@ -108,8 +116,10 @@ impl FriendEntry {
         if !user.display_name.is_empty() {
             self.name = user.display_name.clone();
         }
+        // status を含む `user` はプロフィール全体なので、空のステータスメッセージも「未設定」として反映する
         if !user.status.is_empty() {
             self.status = FriendStatus::from_api(&user.status);
+            self.status_message = user.status_description.clone();
         }
     }
 }
@@ -120,6 +130,7 @@ pub struct FriendView {
     id: String,
     name: String,
     status: FriendStatus,
+    status_message: String,
     location_kind: &'static str,
     /// locationKind が world のときのみ。`wrld_…:…` 形式
     location: Option<String>,
@@ -151,6 +162,62 @@ pub struct GroupInstanceView {
     first_seen_at: i64,
     /// Created ソート用の値。大きいほど新しい
     created_order: u32,
+}
+
+/// 全グループ分のグループインスタンス取得結果
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupInstanceListView {
+    /// VRChat 側でこの一覧が取得された時刻 (epoch ms)。レスポンスから読めなければ Polaris が受け取った時刻
+    fetched_at: i64,
+    instances: Vec<GroupInstanceView>,
+}
+
+/// フレンドがいるインスタンス 1 件分の詳細表示用データ
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceDetailView {
+    /// `wrld_…:…` 形式の location
+    location: String,
+    world_name: String,
+    thumbnail_url: Option<String>,
+    /// `"public"` / `"friendsPlus"` / `"friends"` / `"invitePlus"` / `"invite"` / `"groupPublic"` / `"groupPlus"` / `"group"`
+    instance_type: &'static str,
+    /// インスタンスを立てた group / user の名前。Public や解決できなかったときは None
+    host_name: Option<String>,
+    user_count: u32,
+    capacity: u32,
+}
+
+/// インスタンスを立てた側
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InstanceHost {
+    Group(String),
+    User(String),
+}
+
+/// location の `~…` 部分からインスタンス種別とホストを読み取る
+fn instance_type_from_location(location: &str) -> (&'static str, Option<InstanceHost>) {
+    if let Some(group_id) = location_param(location, "group") {
+        let instance_type = match location_param(location, "groupAccessType") {
+            Some("public") => "groupPublic",
+            Some("plus") => "groupPlus",
+            _ => "group",
+        };
+        return (instance_type, Some(InstanceHost::Group(group_id.to_owned())));
+    }
+    let user_host = |id: &str| Some(InstanceHost::User(id.to_owned()));
+    if let Some(user_id) = location_param(location, "hidden") {
+        return ("friendsPlus", user_host(user_id));
+    }
+    if let Some(user_id) = location_param(location, "friends") {
+        return ("friends", user_host(user_id));
+    }
+    if let Some(user_id) = location_param(location, "private") {
+        let can_request_invite = location.split('~').skip(1).any(|part| part == "canRequestInvite");
+        return (if can_request_invite { "invitePlus" } else { "invite" }, user_host(user_id));
+    }
+    ("public", None)
 }
 
 /// 観測済みのグループインスタンスについて、取得をまたいで保持する値
@@ -189,6 +256,73 @@ fn now_epoch_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
+/// RFC 3339 形式 (`2024-05-01T12:34:56.789Z` / `…+09:00`) の日時を epoch ms に変換する。
+/// crate を増やさないよう、VRChat API が返す形式に必要な範囲だけ自前で parse する
+fn parse_rfc3339_ms(text: &str) -> Option<i64> {
+    let bytes = text.as_bytes();
+    let digits = |s: &str| -> Option<i64> { s.bytes().all(|c| c.is_ascii_digit()).then(|| s.parse().ok()).flatten() };
+    let number = |start: usize, len: usize| digits(text.get(start..start + len)?);
+    let is_separator = |index: usize, expected: &[u8]| bytes.get(index).is_some_and(|c| expected.contains(c));
+    if !(is_separator(4, b"-") && is_separator(7, b"-") && is_separator(10, b"Tt ") && is_separator(13, b":") && is_separator(16, b":")) {
+        return None;
+    }
+    let (year, month, day) = (number(0, 4)?, number(5, 2)?, number(8, 2)?);
+    let (hour, minute, second) = (number(11, 2)?, number(14, 2)?, number(17, 2)?);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+
+    let mut rest = text.get(19..)?;
+    let mut millis = 0;
+    if let Some(fraction) = rest.strip_prefix('.') {
+        let len = fraction.bytes().take_while(u8::is_ascii_digit).count();
+        if len == 0 {
+            return None;
+        }
+        // ms より細かい桁は切り捨てる
+        let head = &fraction[..len.min(3)];
+        millis = head.parse::<i64>().ok()? * 10_i64.pow(3 - head.len() as u32);
+        rest = &fraction[len..];
+    }
+    let offset_minutes = match rest.as_bytes() {
+        [b'Z' | b'z'] => 0,
+        [sign @ (b'+' | b'-'), _, _, b':', _, _] => {
+            let minutes = digits(&rest[1..3])? * 60 + digits(&rest[4..6])?;
+            if *sign == b'+' { minutes } else { -minutes }
+        }
+        _ => return None,
+    };
+
+    let seconds = days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second - offset_minutes * 60;
+    Some(seconds * 1_000 + millis)
+}
+
+/// 1970-01-01 からの日数 (proleptic Gregorian calendar)
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// epoch ms をログ用に端末のタイムゾーンの時刻 (`2024-05-01 21:34:56.789 +09:00`) にする
+fn format_local_time(epoch_ms: i64) -> String {
+    chrono::Local
+        .timestamp_millis_opt(epoch_ms)
+        .single()
+        .map_or_else(|| epoch_ms.to_string(), |time| time.format("%Y-%m-%d %H:%M:%S%.3f %:z").to_string())
+}
+
+/// fetchedAt から次にグループインスタンスを全体取得するまでの待ち時間。
+/// 端末と VRChat の時計がずれていても連続取得や長すぎる待ちにならないよう、[最低限空ける時間, 取得間隔] に収める
+fn group_instances_refresh_delay(fetched_at_ms: i64, now_ms: i64) -> Duration {
+    let interval_ms = GROUP_INSTANCES_REFRESH_INTERVAL.as_millis() as i64;
+    let min_ms = GROUP_INSTANCES_MIN_REFRESH_DELAY.as_millis() as i64;
+    Duration::from_millis((fetched_at_ms + interval_ms - now_ms).clamp(min_ms, interval_ms) as u64)
+}
+
 #[derive(Default)]
 struct SocialStore {
     /// start / stop のたびに進める。古いセッションのタスクによる書き込みを捨てるために使う
@@ -198,6 +332,8 @@ struct SocialStore {
     world_names: HashMap<String, String>,
     world_retry_at: HashMap<String, Instant>,
     groups: Vec<GroupView>,
+    /// インスタンスのホスト (group / user) の ID → 名前。所属グループ・friend 以外を API で引いた分
+    host_names: HashMap<String, String>,
     /// グループインスタンスの location → 観測済みの値
     instance_seen: HashMap<String, SeenInstance>,
     /// 次に初めて見るグループインスタンスに振る Created ソート用の値
@@ -218,6 +354,7 @@ impl SocialStore {
                     id: friend.id.clone(),
                     name: friend.name.clone(),
                     status: if friend.location == FriendLocation::Offline { FriendStatus::Offline } else { friend.status },
+                    status_message: friend.status_message.clone(),
                     location_kind: friend.location.kind(),
                     location,
                     is_world_loading: is_in_world && world_name.is_none() && self.pinned.contains(&friend.id),
@@ -269,6 +406,18 @@ impl SocialStore {
         }
     }
 
+    /// 所属グループ・friend・取得済みのキャッシュからホスト名を引く
+    fn known_host_name(&self, host: &InstanceHost) -> Option<String> {
+        match host {
+            InstanceHost::Group(id) => self.groups.iter().find(|g| &g.id == id).map(|g| g.name.clone()),
+            InstanceHost::User(id) => self.friends.get(id).map(|f| f.name.clone()),
+        }
+        .or_else(|| {
+            let (InstanceHost::Group(id) | InstanceHost::User(id)) = host;
+            self.host_names.get(id).cloned()
+        })
+    }
+
     /// 全グループ分のインスタンスから表示用データを作る。
     /// 初めて見る location は `now_ms` を記録し、今回含まれなかった (閉じた) location の記録は破棄する
     fn apply_group_instances(&mut self, instances: Vec<ApiInstance>, now_ms: i64) -> Vec<GroupInstanceView> {
@@ -318,8 +467,8 @@ impl SocialStore {
     ) -> (Vec<GroupInstanceView>, HashMap<String, SeenInstance>) {
         let instances: Vec<_> = instances.into_iter().filter(|inst| !inst.location.is_empty() && !inst.world_name.is_empty()).collect();
         let mut seen = HashMap::new();
-        // API はおおむね作成が新しい順に返すので、初めて見るインスタンスには末尾 (古い方) から順に値を振る
-        for inst in instances.iter().rev() {
+        // API はおおむね作成が古い順に返すので、初めて見るインスタンスには先頭から順に値を振り、末尾ほど新しくする
+        for inst in &instances {
             if seen.contains_key(&inst.location) {
                 continue;
             }
@@ -499,6 +648,99 @@ impl Session {
         }
     }
 
+    /// 所属する全グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
+    async fn fetch_group_instances(&self) -> Result<GroupInstanceListView, AuthError> {
+        let list = match self.client.get_user_group_instances(&self.user_id).await {
+            Ok(list) => list,
+            Err(error) => {
+                self.handle_error(&error);
+                return Err(error);
+            }
+        };
+        let now_ms = now_epoch_ms();
+        let parsed = parse_rfc3339_ms(&list.fetched_at);
+        let fetched_at = parsed.unwrap_or(now_ms);
+        let next_in = group_instances_refresh_delay(fetched_at, now_ms).as_secs_f64();
+        match parsed {
+            Some(ms) => eprintln!(
+                "[group-instances] fetchedAt={} (raw={:?}, age={:.1}s, next in {next_in:.1}s)",
+                format_local_time(ms),
+                list.fetched_at,
+                (now_ms - ms) as f64 / 1000.0,
+            ),
+            None => eprintln!("[group-instances] fetchedAt={:?} (unparsed; using local time, next in {next_in:.1}s)", list.fetched_at),
+        }
+        self.with_store(|store| GroupInstanceListView { fetched_at, instances: store.apply_group_instances(list.instances, now_ms) })
+            .ok_or(AuthError::Unauthorized)
+    }
+
+    /// フレンドがいるインスタンスの詳細を取得する。ホスト名は既知のデータに無ければ API で引く
+    async fn fetch_instance_detail(&self, location: &str) -> Result<InstanceDetailView, AuthError> {
+        let detail: ApiInstanceDetail = match self.client.get_instance(location).await {
+            Ok(detail) => detail,
+            Err(error) => {
+                self.handle_error(&error);
+                return Err(error);
+            }
+        };
+        let (instance_type, host) = instance_type_from_location(location);
+        let host_name = match host {
+            Some(host) => match self.with_store(|store| store.known_host_name(&host)).ok_or(AuthError::Unauthorized)? {
+                Some(name) => Some(name),
+                None => self.fetch_host_name(&host).await,
+            },
+            None => None,
+        };
+        let world = detail.world;
+        Ok(InstanceDetailView {
+            location: location.to_owned(),
+            world_name: world.name,
+            thumbnail_url: Some(world.thumbnail_image_url).filter(|url| !url.is_empty()),
+            instance_type,
+            host_name,
+            user_count: detail.user_count,
+            capacity: detail.capacity,
+        })
+    }
+
+    /// ホスト名を API で引いてキャッシュする。取得できなくても詳細は表示したいので、失敗は None として扱う
+    async fn fetch_host_name(&self, host: &InstanceHost) -> Option<String> {
+        let (id, result) = match host {
+            InstanceHost::Group(id) => (id, self.client.get_group(id).await.map(|g| g.name)),
+            InstanceHost::User(id) => (id, self.client.get_user(id).await.map(|u| u.display_name)),
+        };
+        match result {
+            Ok(name) if !name.is_empty() => {
+                self.with_store(|store| store.host_names.insert(id.clone(), name.clone()));
+                Some(name)
+            }
+            Ok(_) => None,
+            Err(error) => {
+                self.handle_error(&error);
+                None
+            }
+        }
+    }
+
+    /// Run in background でウィンドウが見えていない間、グループインスタンスを定期取得して初めて観測した時刻を記録し続ける
+    /// 次の取得は fetchedAt + 取得間隔 に行い、取得できなかったときは取得間隔だけ待つ
+    async fn run_background_group_poll(self) {
+        let mut delay = GROUP_INSTANCES_REFRESH_INTERVAL;
+        loop {
+            tokio::time::sleep(delay).await;
+            if !background::should_poll_in_background(&self.app) {
+                delay = GROUP_INSTANCES_REFRESH_INTERVAL;
+                continue;
+            }
+            delay = match self.fetch_group_instances().await {
+                Ok(list) => group_instances_refresh_delay(list.fetched_at, now_epoch_ms()),
+                Err(AuthError::RateLimited) => RATE_LIMIT_PAUSE + GROUP_INSTANCES_REFRESH_INTERVAL,
+                Err(AuthError::Unauthorized) => return,
+                Err(_) => GROUP_INSTANCES_REFRESH_INTERVAL,
+            };
+        }
+    }
+
     async fn run_world_queue(self) {
         let mut interval = tokio::time::interval(WORLD_FETCH_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -534,7 +776,7 @@ impl SocialState {
         Self { store: Arc::default(), tasks: Mutex::default(), session: Mutex::default() }
     }
 
-    /// ログイン完了時に呼ぶ。初期同期・pipeline・World 名取得のタスクを起動する
+    /// ログイン完了時に呼ぶ。初期同期・pipeline・World 名取得・バックグラウンド中の定期取得のタスクを起動する
     pub fn start(&self, app: AppHandle, client: VrchatClient, user_id: String) {
         self.stop();
         let generation = self.store.lock().expect("social store poisoned").generation;
@@ -548,6 +790,7 @@ impl SocialState {
             }),
             tauri::async_runtime::spawn(session.clone().run_pipeline()),
             tauri::async_runtime::spawn(session.clone().run_world_queue()),
+            tauri::async_runtime::spawn(session.clone().run_background_group_poll()),
         ];
         *self.tasks.lock().expect("social tasks poisoned") = tasks;
         *self.session.lock().expect("social session poisoned") = Some(session);
@@ -573,18 +816,9 @@ impl SocialState {
     }
 
     /// 所属する全グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
-    pub async fn fetch_group_instances(&self) -> Result<Vec<GroupInstanceView>, AuthError> {
+    pub async fn fetch_group_instances(&self) -> Result<GroupInstanceListView, AuthError> {
         let session = self.session.lock().expect("social session poisoned").clone().ok_or(AuthError::Unauthorized)?;
-        let list = match session.client.get_user_group_instances(&session.user_id).await {
-            Ok(list) => list,
-            Err(error) => {
-                session.handle_error(&error);
-                return Err(error);
-            }
-        };
-        session
-            .with_store(|store| store.apply_group_instances(list.instances, now_epoch_ms()))
-            .ok_or(AuthError::Unauthorized)
+        session.fetch_group_instances().await
     }
 
     /// 指定した 1 グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
@@ -602,6 +836,12 @@ impl SocialState {
             .ok_or(AuthError::Unauthorized)
     }
 
+    /// フレンドがいるインスタンスの詳細を取得する
+    pub async fn fetch_instance_detail(&self, location: &str) -> Result<InstanceDetailView, AuthError> {
+        let session = self.session.lock().expect("social session poisoned").clone().ok_or(AuthError::Unauthorized)?;
+        session.fetch_instance_detail(location).await
+    }
+
     /// pinned を置き換え、`is_world_loading` が変わるので snapshot を返す
     pub fn set_pinned(&self, ids: Vec<String>) -> Vec<FriendView> {
         let mut store = self.store.lock().expect("social store poisoned");
@@ -616,7 +856,13 @@ mod tests {
     use crate::vrchat_models::{ApiGroupInstanceWorld, ApiWorld};
 
     fn api_friend(id: &str, status: &str, location: &str) -> ApiFriend {
-        ApiFriend { id: id.into(), display_name: id.to_uppercase(), status: status.into(), location: location.into() }
+        ApiFriend {
+            id: id.into(),
+            display_name: id.to_uppercase(),
+            status: status.into(),
+            location: location.into(),
+            status_description: String::new(),
+        }
     }
 
     fn view<'a>(views: &'a [FriendView], id: &str) -> &'a FriendView {
@@ -661,7 +907,7 @@ mod tests {
             user_id: "a".into(),
             location: "wrld_y:2".into(),
             user: None,
-            world: Some(ApiWorld { id: "wrld_y".into(), name: "Rainy Window".into() }),
+            world: Some(ApiWorld { id: "wrld_y".into(), name: "Rainy Window".into(), ..ApiWorld::default() }),
         });
         let views = store.friend_views();
         assert_eq!(view(&views, "a").world_name.as_deref(), Some("Rainy Window"));
@@ -677,6 +923,62 @@ mod tests {
         assert!(store.pinned.is_empty());
     }
 
+    #[test]
+    fn updates_status_message_from_full_profile_only() {
+        let mut store = SocialStore::default();
+        let mut user = api_friend("a", "active", "wrld_x:1");
+        user.status_description = "おやすみ".into();
+        store.replace_friends(vec![user.clone()], vec![]);
+        assert_eq!(view(&store.friend_views(), "a").status_message, "おやすみ");
+
+        // status を含まない `user` ではステータスメッセージを変えない
+        let partial = ApiFriend { status: String::new(), ..api_friend("a", "", "") };
+        store.apply(&PipelineEvent::FriendUpdate { user_id: "a".into(), user: partial });
+        assert_eq!(view(&store.friend_views(), "a").status_message, "おやすみ");
+
+        user.status_description = String::new();
+        store.apply(&PipelineEvent::FriendUpdate { user_id: "a".into(), user });
+        assert_eq!(view(&store.friend_views(), "a").status_message, "");
+    }
+
+    #[test]
+    fn parses_instance_types() {
+        let group = |id: &str| Some(InstanceHost::Group(id.into()));
+        let user = |id: &str| Some(InstanceHost::User(id.into()));
+        assert_eq!(instance_type_from_location("wrld_a:1~region(jp)"), ("public", None));
+        assert_eq!(instance_type_from_location("wrld_a:1~hidden(usr_1)~region(jp)"), ("friendsPlus", user("usr_1")));
+        assert_eq!(instance_type_from_location("wrld_a:1~friends(usr_1)~region(jp)"), ("friends", user("usr_1")));
+        assert_eq!(
+            instance_type_from_location("wrld_a:1~private(usr_1)~canRequestInvite~region(us)"),
+            ("invitePlus", user("usr_1"))
+        );
+        assert_eq!(instance_type_from_location("wrld_a:1~private(usr_1)~region(us)"), ("invite", user("usr_1")));
+        assert_eq!(
+            instance_type_from_location("wrld_a:1~group(grp_1)~groupAccessType(public)~region(jp)"),
+            ("groupPublic", group("grp_1"))
+        );
+        assert_eq!(
+            instance_type_from_location("wrld_a:1~group(grp_1)~groupAccessType(plus)"),
+            ("groupPlus", group("grp_1"))
+        );
+        assert_eq!(
+            instance_type_from_location("wrld_a:1~group(grp_1)~groupAccessType(members)"),
+            ("group", group("grp_1"))
+        );
+    }
+
+    #[test]
+    fn resolves_known_host_names() {
+        let mut store = SocialStore::default();
+        store.replace_friends(vec![api_friend("usr_1", "active", "wrld_x:1")], vec![]);
+        store.groups = vec![GroupView { id: "grp_1".into(), name: "寝落ち図書館".into() }];
+        store.host_names.insert("usr_2".into(), "あおい".into());
+        assert_eq!(store.known_host_name(&InstanceHost::Group("grp_1".into())).as_deref(), Some("寝落ち図書館"));
+        assert_eq!(store.known_host_name(&InstanceHost::User("usr_1".into())).as_deref(), Some("USR_1"));
+        assert_eq!(store.known_host_name(&InstanceHost::User("usr_2".into())).as_deref(), Some("あおい"));
+        assert_eq!(store.known_host_name(&InstanceHost::Group("grp_9".into())), None);
+    }
+
     fn api_instance(location: &str, access_type: &str) -> ApiInstance {
         ApiInstance {
             location: location.into(),
@@ -684,7 +986,7 @@ mod tests {
             user_count: 3,
             capacity: 16,
             group_access_type: access_type.into(),
-            world: ApiWorld { id: "wrld_a".into(), name: "Quiet Shore".into() },
+            world: ApiWorld { id: "wrld_a".into(), name: "Quiet Shore".into(), ..ApiWorld::default() },
         }
     }
 
@@ -701,14 +1003,14 @@ mod tests {
         assert_eq!(views[1].first_seen_at, 200);
         assert_eq!(views[1].access_type, "members");
         // 既知の wrld_a:2 は初回の値のまま、初めて見る wrld_a:3 だけ既存より新しい値になる
-        assert_eq!(views.iter().map(|v| v.created_order).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(views.iter().map(|v| v.created_order).collect::<Vec<_>>(), [2, 3]);
         assert!(!store.instance_seen.contains_key("wrld_a:1"));
     }
 
     #[test]
     fn keeps_created_order_of_known_instances_on_group_refresh() {
         let mut store = SocialStore::default();
-        store.apply_group_instances(vec![api_instance("wrld_a:2~group(grp_1)", "public"), api_instance("wrld_a:1~group(grp_1)", "public")], 100);
+        store.apply_group_instances(vec![api_instance("wrld_a:1~group(grp_1)", "public"), api_instance("wrld_a:2~group(grp_1)", "public")], 100);
 
         // 1 グループ分の API はレスポンス順が異なっても既知の順序を変えない
         let views = store.apply_instances_of_group(
@@ -769,6 +1071,36 @@ mod tests {
         let mut not_group = api_instance("wrld_a:1", "public");
         not_group.owner_id = "usr_1".into();
         assert!(store.apply_group_instances(vec![not_group], 100).is_empty());
+    }
+
+    #[test]
+    fn parses_rfc3339_fetched_at() {
+        assert_eq!(parse_rfc3339_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_rfc3339_ms("2024-05-01T12:34:56.789Z"), Some(1_714_566_896_789));
+        assert_eq!(parse_rfc3339_ms("2024-05-01T12:34:56Z"), Some(1_714_566_896_000));
+        assert_eq!(parse_rfc3339_ms("2024-05-01T12:34:56.7Z"), Some(1_714_566_896_700));
+        assert_eq!(parse_rfc3339_ms("2024-05-01T12:34:56.789123Z"), Some(1_714_566_896_789));
+        assert_eq!(parse_rfc3339_ms("2024-05-01T21:34:56.789+09:00"), Some(1_714_566_896_789));
+        assert_eq!(parse_rfc3339_ms("2024-05-01T07:04:56.789-05:30"), Some(1_714_566_896_789));
+        assert_eq!(parse_rfc3339_ms("2024-02-29T00:00:00Z"), Some(1_709_164_800_000));
+    }
+
+    #[test]
+    fn rejects_malformed_fetched_at() {
+        for text in ["", "2024-05-01", "2024-05-01T12:34:56", "2024-13-01T00:00:00Z", "2024-05-01T12:34:56.Z", "2024-05-01T12:34:56+0900", "2024-05-01T12:34:5xZ"] {
+            assert_eq!(parse_rfc3339_ms(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn schedules_next_group_poll_from_fetched_at() {
+        let now = 1_000_000;
+        assert_eq!(group_instances_refresh_delay(now, now), Duration::from_secs(90));
+        assert_eq!(group_instances_refresh_delay(now - 30_000, now), Duration::from_secs(60));
+        // 時計のずれで予定が過ぎていても連続取得しない
+        assert_eq!(group_instances_refresh_delay(now - 120_000, now), Duration::from_secs(10));
+        // fetchedAt が未来でも取得間隔より長くは待たない
+        assert_eq!(group_instances_refresh_delay(now + 60_000, now), Duration::from_secs(90));
     }
 
     #[test]

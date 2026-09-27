@@ -31,6 +31,7 @@ export const canOpenFriendLocation = (friend: Friend): friend is Friend & { loca
 /**
  * 一覧での並び順:
  * インスタンス内 → 非公開・移動中 (Join Me / Online → Ask Me → Do Not Disturb) → Web → オフライン
+ * (同じ順位の中はステータス順 → 名前順。compareFriends を参照)
  */
 export function friendRank(friend: Friend): number {
   switch (friend.locationKind) {
@@ -48,4 +49,8 @@ export function friendRank(friend: Friend): number {
   }
 }
 
-export const compareFriends = (a: Friend, b: Friend) => friendRank(a) - friendRank(b) || a.name.localeCompare(b.name);
+/** 同じ friendRank 内での並び順: Join Me → Online → Ask Me → Do Not Disturb → Offline */
+const STATUS_ORDER: Record<FriendStatus, number> = { join: 0, online: 1, ask: 2, busy: 3, offline: 4 };
+
+export const compareFriends = (a: Friend, b: Friend) =>
+  friendRank(a) - friendRank(b) || STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || a.name.localeCompare(b.name);

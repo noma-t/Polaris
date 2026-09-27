@@ -1164,19 +1164,36 @@ a:hover {
   flex-direction: column;
   gap: 8px;
 }
+.friend-card {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-card);
+  border: 1px solid var(--color-line-soft);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.friend-card.is-offline {
+  background: transparent;
+}
+.friend-card.is-expanded {
+  background: var(--color-card-open);
+}
 .friend-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  height: 64px;
+  height: 62px;
   box-sizing: border-box;
   padding: 0 6px 0 14px;
-  background: var(--color-card);
-  border: 1px solid var(--color-line-soft);
-  border-radius: 6px;
 }
-.friend-row.is-offline {
-  background: transparent;
+.friend-row.is-expandable {
+  cursor: pointer;
+}
+.friend-row.is-expandable:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+  border-radius: 5px;
 }
 .friend-info {
   flex: 1 1 0;
@@ -1195,7 +1212,7 @@ a:hover {
   font-weight: 600;
   color: var(--color-text);
 }
-.friend-row.is-offline .friend-name {
+.friend-card.is-offline .friend-name {
   color: var(--color-text-muted);
 }
 .friend-location {
@@ -1234,6 +1251,187 @@ a:hover {
 .friend-location-hidden {
   font-size: 13px;
   color: var(--color-text-muted);
+}
+.friend-expand-chevron {
+  flex: none;
+  width: 20px;
+  font-size: 12px;
+  text-align: center;
+  color: var(--color-text-muted);
+  transition: transform 160ms var(--ease-panel);
+}
+.friend-expand-chevron.is-expanded {
+  transform: rotate(180deg);
+}
+/* Open のクリックを行へ伝えないための wrapper。レイアウトには影響させない */
+.friend-open-action {
+  display: contents;
+}
+
+/* ----- Friends 欄のインライン展開 ----- */
+.friend-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--color-line-soft);
+  background: var(--color-card-detail);
+}
+.friend-status-message {
+  margin: 0;
+  font-family: var(--font-name);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.friend-instance {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 128px;
+  gap: 12px;
+  align-items: center;
+}
+.friend-instance-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.friend-instance-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.friend-instance-label {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.instance-refresh-button {
+  position: relative;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+}
+.instance-refresh-button:hover:not(:disabled) {
+  background: var(--color-menu-hover);
+}
+.instance-refresh-button:disabled {
+  color: var(--color-disabled-text);
+  cursor: default;
+}
+/* 手動更新のクールダウン残り時間を示すリング */
+.instance-refresh-cooldown {
+  position: absolute;
+  inset: 0;
+  width: 24px;
+  height: 24px;
+  transform: rotate(-90deg);
+  pointer-events: none;
+}
+.instance-refresh-cooldown circle {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-dasharray: 67.9 67.9;
+  animation: instance-refresh-cooldown 3000ms linear forwards;
+}
+@keyframes instance-refresh-cooldown {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 67.9;
+  }
+}
+.friend-instance-world,
+.friend-instance-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-name);
+}
+.friend-instance-world {
+  font-size: 15px;
+  font-weight: 700;
+}
+.friend-instance-type {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+.friend-instance-user-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.friend-instance-user-count.is-full {
+  color: var(--color-warn);
+}
+.friend-instance-user-icon {
+  color: var(--color-text-muted);
+}
+.friend-instance-error {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  text-wrap: pretty;
+}
+.friend-instance-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+.friend-instance-skeleton .skeleton-line {
+  width: 140px;
+  max-width: 100%;
+  height: 13px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--color-line-soft) 0%,
+    var(--color-line-soft) 35%,
+    var(--color-line) 50%,
+    var(--color-line-soft) 65%,
+    var(--color-line-soft) 100%
+  );
+  background-size: 300% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+.friend-instance-skeleton .skeleton-line.is-short {
+  width: 60px;
+}
+.friend-instance-thumbnail {
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: repeating-linear-gradient(135deg, var(--color-menu-hover) 0 8px, var(--color-key-sub) 8px 16px);
+  border: 1px solid var(--color-line-soft);
+  border-radius: 4px;
+}
+.friend-instance-thumbnail img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+@media (prefers-reduced-motion: reduce) {
+  .friend-expand-chevron {
+    transition: none;
+  }
+  .instance-refresh-cooldown circle,
+  .friend-instance-skeleton .skeleton-line {
+    animation: none;
+  }
 }
 
 /* ===== Dialog ===== */

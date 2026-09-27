@@ -1,4 +1,4 @@
-//! アプリ共通の設定 (launch.exe のパス・Developer 向け設定) と、ユーザーごとの表示設定
+//! アプリ共通の設定 (launch.exe のパス・バックグラウンド実行・スタートアップ起動・Developer 向け設定) と、ユーザーごとの表示設定
 //! (pinned friend・表示する group・折りたたんだ group)、前回終了時の UI 状態を app data dir の `settings.json` に保存する。
 
 use std::collections::HashMap;
@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
+use crate::background;
 use crate::game_monitor::GameState;
 use crate::vrchat_client::AuthError;
 
@@ -26,6 +27,12 @@ pub struct AppSettings {
     pub developer_mode: bool,
     /// 通信せずにダミーの update を表示する (developer_mode が有効な場合のみ効く)
     pub simulate_update_available: bool,
+    /// サムネイル撮影用に、実 Friends を隠してダミーの Friends を表示する (developer_mode が有効な場合のみ効く)
+    pub thumbnail_mode: bool,
+    /// × でシステムトレイに格納し、ウィンドウを閉じている間もグループインスタンスの観測を続ける
+    pub run_in_background: bool,
+    /// OS へのログイン時に Polaris を起動する
+    pub launch_at_startup: bool,
 }
 
 impl Default for AppSettings {
@@ -34,6 +41,9 @@ impl Default for AppSettings {
             launcher_path: DEFAULT_LAUNCHER_PATH.to_owned(),
             developer_mode: false,
             simulate_update_available: false,
+            thumbnail_mode: false,
+            run_in_background: false,
+            launch_at_startup: false,
         }
     }
 }
@@ -156,7 +166,8 @@ pub fn settings_load_app(app: AppHandle, state: State<'_, SettingsState>) -> Res
     Ok(read_file(&path).app)
 }
 
-/// 保存後、次の poll を待たずに launch.exe の存在確認を反映する
+/// 自動起動の登録に失敗した場合は保存しない。
+/// 保存後、次の poll を待たずに launch.exe の存在確認とバックグラウンド実行の設定を反映する
 #[tauri::command]
 pub fn settings_save_app(
     app: AppHandle,
@@ -167,10 +178,16 @@ pub fn settings_save_app(
     let _guard = state.0.lock().expect("settings lock poisoned");
     let path = settings_path(&app)?;
     let mut file = read_file(&path);
+    if settings.launch_at_startup != file.app.launch_at_startup {
+        background::set_autostart(&app, settings.launch_at_startup)
+            .map_err(|err| AuthError::Unexpected(format!("Failed to update launch at startup: {err}")))?;
+    }
     let launcher_path = settings.launcher_path.clone();
+    let run_in_background = settings.run_in_background;
     file.app = settings;
     write_file(&path, &file)?;
     game.set_launcher_path(&app, launcher_path);
+    background::apply(&app, run_in_background);
     Ok(())
 }
 

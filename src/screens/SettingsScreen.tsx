@@ -34,11 +34,25 @@ export function SettingsScreen({ version, appSettings, onUpdateAppSettings, upda
         onSave={(launcherPath) => saveAppSettings({ launcherPath }, "Failed to save the launch.exe path")}
         isLauncherFound={isLauncherFound}
       />
+      <ToggleSettingRow
+        title="Run in background"
+        description="Polaris が完全に終了せずに最小化され、グループインスタンスの監視を続けます。"
+        isOn={appSettings?.runInBackground ?? false}
+        isDisabled={!appSettings}
+        onToggle={(runInBackground) => void saveAppSettings({ runInBackground }, "Failed to save Run in background")}
+      />
+      <ToggleSettingRow
+        title="Launch at startup"
+        description="PC起動時に Polaris を自動で開きます。"
+        isOn={appSettings?.launchAtStartup ?? false}
+        isDisabled={!appSettings}
+        onToggle={(launchAtStartup) => void saveAppSettings({ launchAtStartup }, "Failed to save Launch at startup")}
+      />
       <UpdateSettingRow version={version} updater={updater} />
       {isDeveloperModeVisible && (
         <ToggleSettingRow
           title="Developer mode"
-          description="Show settings for development and testing"
+          description="開発・テスト用の設定項目を表示します。"
           isOn={appSettings?.developerMode ?? false}
           isDisabled={!appSettings}
           onToggle={(developerMode) => void saveAppSettings({ developerMode }, "Failed to save Developer mode")}
@@ -49,11 +63,17 @@ export function SettingsScreen({ version, appSettings, onUpdateAppSettings, upda
           <span className="developer-settings-title">Developer</span>
           <ToggleSettingRow
             title="Simulate available update"
-            description="Show a dummy update without contacting the update server. Nothing is downloaded or installed."
+            description="アップデートサーバーに問い合わせず、ダミーのアップデートを表示します。実際のダウンロードやインストールは行いません。"
             isOn={appSettings.simulateUpdateAvailable}
             onToggle={(simulateUpdateAvailable) =>
               void saveAppSettings({ simulateUpdateAvailable }, "Failed to save Simulate available update")
             }
+          />
+          <ToggleSettingRow
+            title="Thumbnail mode"
+            description="サムネイル撮影用に、フレンドをダミーデータに置き換えます。実際のフレンドは非表示になり、ピン留めしたフレンドはそのまま残ります。"
+            isOn={appSettings.thumbnailMode}
+            onToggle={(thumbnailMode) => void saveAppSettings({ thumbnailMode }, "Failed to save Thumbnail mode")}
           />
         </div>
       )}
@@ -114,7 +134,7 @@ function UpdateSettingRow({ version, updater }: { version: string; updater: Upda
       <div className="settings-row-text">
         <span className="settings-row-title">Updates</span>
         <span className="settings-row-description">
-          Current version <span className="settings-version">{version}</span>
+          現在のバージョン <span className="settings-version">{version}</span>
         </span>
         {statusText[status] && (
           <span
@@ -221,7 +241,7 @@ function LauncherSettingRow({
     <div className="settings-row launcher-setting-row">
       <div className="settings-row-text">
         <span className="settings-row-title">VRChat launcher</span>
-        <span className="settings-row-description">Path to launch.exe, used to open instances in VRChat</span>
+        <span className="settings-row-description">launch.exe のパス</span>
       </div>
       <div className="launcher-path-field">
         <input

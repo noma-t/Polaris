@@ -89,7 +89,7 @@ fn is_game_running(system: &mut System) -> bool {
 }
 
 /// `wrld_…:…` 形式で、URL や引数として解釈が変わる文字を含まない location か
-fn is_valid_instance_location(location: &str) -> bool {
+pub(crate) fn is_valid_instance_location(location: &str) -> bool {
     let Some((world_id, instance_id)) = location.split_once(':') else {
         return false;
     };

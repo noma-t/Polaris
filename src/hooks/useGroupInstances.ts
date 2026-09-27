@@ -11,8 +11,14 @@ export interface SortState {
 
 /** 手動更新の全体共通クールダウン (秒) */
 export const REFRESH_COOLDOWN_SEC = 3;
-const AUTO_REFRESH_BASE_MS = 60_000;
-const AUTO_REFRESH_JITTER_MS = 15_000;
+/** fetchedAt から次の自動更新までの間隔 (Rust 側のバックグラウンド取得と揃える) */
+const AUTO_REFRESH_INTERVAL_MS = 90_000;
+/** 端末と VRChat の時計のずれで fetchedAt + 間隔 が過ぎていても、連続取得しないよう最低限空ける時間 */
+const AUTO_REFRESH_MIN_DELAY_MS = 10_000;
+
+/** fetchedAt から次の自動更新時刻を決める。時計がずれていても [最低限空ける時間, 取得間隔] 後に収める */
+const nextAutoRefreshAt = (fetchedAt: number, now: number) =>
+  now + Math.min(AUTO_REFRESH_INTERVAL_MS, Math.max(AUTO_REFRESH_MIN_DELAY_MS, fetchedAt + AUTO_REFRESH_INTERVAL_MS - now));
 
 interface UseGroupInstancesOptions {
   isSignedIn: boolean;
@@ -55,12 +61,15 @@ export function useGroupInstances({ isSignedIn, hasOpenGroup, sort, onSortChange
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     const session = sessionRef.current;
+    /** 取得に失敗したときは完了時刻を基準にする */
+    let fetchedAt: number | null = null;
     setIsLoading(true);
     try {
       if (groupId === undefined) {
-        const instances = await getGroupInstances();
+        const list = await getGroupInstances();
         if (session !== sessionRef.current) return;
-        setInstancesByGroup(groupByGroupId(instances));
+        fetchedAt = list.fetchedAt;
+        setInstancesByGroup(groupByGroupId(list.instances));
         setHasLoadFailed(false);
       } else {
         const instances = await getInstancesOfGroup(groupId);
@@ -81,7 +90,8 @@ export function useGroupInstances({ isSignedIn, hasOpenGroup, sort, onSortChange
         setIsLoading(false);
         // 1 グループの取得ではほかのグループが古いままなので、自動更新の予定は延ばさない
         if (groupId === undefined) {
-          nextAutoRef.current = Date.now() + AUTO_REFRESH_BASE_MS + Math.random() * AUTO_REFRESH_JITTER_MS;
+          const now = Date.now();
+          nextAutoRef.current = nextAutoRefreshAt(fetchedAt ?? now, now);
         }
       }
     }
