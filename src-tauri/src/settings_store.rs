@@ -1,4 +1,4 @@
-//! アプリ共通の設定 (launch.exe のパス・バックグラウンド実行・Developer 向け設定) と、ユーザーごとの表示設定
+//! アプリ共通の設定 (launch.exe のパス・バックグラウンド実行・スタートアップ起動・Developer 向け設定) と、ユーザーごとの表示設定
 //! (pinned friend・表示する group・折りたたんだ group)、前回終了時の UI 状態を app data dir の `settings.json` に保存する。
 
 use std::collections::HashMap;
@@ -31,6 +31,8 @@ pub struct AppSettings {
     pub thumbnail_mode: bool,
     /// × でシステムトレイに格納し、ウィンドウを閉じている間もグループインスタンスの観測を続ける
     pub run_in_background: bool,
+    /// OS へのログイン時に Polaris を起動する
+    pub launch_at_startup: bool,
 }
 
 impl Default for AppSettings {
@@ -41,6 +43,7 @@ impl Default for AppSettings {
             simulate_update_available: false,
             thumbnail_mode: false,
             run_in_background: false,
+            launch_at_startup: false,
         }
     }
 }
@@ -163,6 +166,7 @@ pub fn settings_load_app(app: AppHandle, state: State<'_, SettingsState>) -> Res
     Ok(read_file(&path).app)
 }
 
+/// 自動起動の登録に失敗した場合は保存しない。
 /// 保存後、次の poll を待たずに launch.exe の存在確認とバックグラウンド実行の設定を反映する
 #[tauri::command]
 pub fn settings_save_app(
@@ -174,6 +178,10 @@ pub fn settings_save_app(
     let _guard = state.0.lock().expect("settings lock poisoned");
     let path = settings_path(&app)?;
     let mut file = read_file(&path);
+    if settings.launch_at_startup != file.app.launch_at_startup {
+        background::set_autostart(&app, settings.launch_at_startup)
+            .map_err(|err| AuthError::Unexpected(format!("Failed to update launch at startup: {err}")))?;
+    }
     let launcher_path = settings.launcher_path.clone();
     let run_in_background = settings.run_in_background;
     file.app = settings;

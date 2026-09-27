@@ -1,10 +1,11 @@
-//! バックグラウンド常時実行 (× でシステムトレイに格納) の制御。
+//! バックグラウンド常時実行 (× でシステムトレイに格納) とスタートアップ起動の制御。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_autostart::ManagerExt;
 
 const MAIN_WINDOW_LABEL: &str = "main";
 const TRAY_ID: &str = "main-tray";
@@ -83,4 +84,24 @@ pub fn should_poll_in_background(app: &AppHandle) -> bool {
     app.get_webview_window(MAIN_WINDOW_LABEL).is_some_and(|window| {
         !window.is_visible().unwrap_or(true) || window.is_minimized().unwrap_or(false)
     })
+}
+
+/// Launch at startup の設定を OS の自動起動登録に反映する
+pub fn set_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let autolaunch = app.autolaunch();
+    let result = if enabled {
+        autolaunch.enable()
+    } else if autolaunch.is_enabled().unwrap_or(false) {
+        autolaunch.disable()
+    } else {
+        Ok(())
+    };
+    result.map_err(|err| err.to_string())
+}
+
+/// 起動時に呼ぶ。有効なら登録し直し、アップデート等で実行ファイルのパスが変わっても追従させる
+pub fn sync_autostart(app: &AppHandle, enabled: bool) {
+    if let Err(err) = set_autostart(app, enabled) {
+        eprintln!("Failed to sync launch at startup: {err}");
+    }
 }

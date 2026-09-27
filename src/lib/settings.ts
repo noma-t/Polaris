@@ -26,6 +26,8 @@ export interface AppSettings {
   thumbnailMode: boolean;
   /** × でシステムトレイに格納し、ウィンドウを閉じている間もグループインスタンスの観測を続ける */
   runInBackground: boolean;
+  /** OS へのログイン時に Polaris を起動する */
+  launchAtStartup: boolean;
 }
 
 export const DEFAULT_LAUNCHER_PATH = "C:/Program Files (x86)/Steam/steamapps/common/VRChat/launch.exe";
@@ -36,6 +38,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   simulateUpdateAvailable: false,
   thumbnailMode: false,
   runInBackground: false,
+  launchAtStartup: false,
 };
 
 export const loadAppSettings = () => invoke<AppSettings>("settings_load_app");

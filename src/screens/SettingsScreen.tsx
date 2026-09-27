@@ -41,6 +41,13 @@ export function SettingsScreen({ version, appSettings, onUpdateAppSettings, upda
         isDisabled={!appSettings}
         onToggle={(runInBackground) => void saveAppSettings({ runInBackground }, "Failed to save Run in background")}
       />
+      <ToggleSettingRow
+        title="Launch at startup"
+        description="Start Polaris automatically when you sign in to your computer."
+        isOn={appSettings?.launchAtStartup ?? false}
+        isDisabled={!appSettings}
+        onToggle={(launchAtStartup) => void saveAppSettings({ launchAtStartup }, "Failed to save Launch at startup")}
+      />
       <UpdateSettingRow version={version} updater={updater} />
       {isDeveloperModeVisible && (
         <ToggleSettingRow

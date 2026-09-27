@@ -16,6 +16,7 @@ use game_monitor::GameState;
 use settings_store::SettingsState;
 use social::SocialState;
 use tauri::{Manager, WindowEvent};
+use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_window_state::StateFlags;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -30,6 +31,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         // 位置は OS 既定のままにし、サイズと最大化状態だけを復元する
         .plugin(
             tauri_plugin_window_state::Builder::new()
@@ -45,6 +47,7 @@ pub fn run() {
             let settings = settings_store::load_app_settings(app.handle());
             app.state::<GameState>().start_monitor(app.handle().clone(), settings.launcher_path);
             background::apply(app.handle(), settings.run_in_background);
+            background::sync_autostart(app.handle(), settings.launch_at_startup);
             Ok(())
         })
         // Run in background が有効なら、× ではプロセスを終了せずトレイに格納する
