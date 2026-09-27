@@ -7,7 +7,7 @@
       <stop offset="0.4" stop-color="#ffffff" stop-opacity="0.35" />
       <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
     </radialGradient>
-    <linearGradient id="beam" x1="645" y1="470" x2="718" y2="392" gradientUnits="userSpaceOnUse">
+    <linearGradient id="beam" x1="645" y1="470" x2="758" y2="340" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#5900ff" />
       <stop offset="1" stop-color="#ffffff" />
     </linearGradient>
@@ -24,7 +24,7 @@
       <path d="M406 606 C410 620 400 632 386 633" />
       <path d="M346 666 C350 682 340 692 325 692" />
     </g>
-    <line x1="645" y1="470" x2="718" y2="392" stroke="url(#beam)" stroke-width="9" stroke-linecap="round" />
+    <line x1="645" y1="470" x2="758" y2="340" stroke="url(#beam)" stroke-width="9" stroke-linecap="round" />
     <g fill="#5900ff">
       <circle cx="315" cy="522" r="26" />
       <circle cx="190" cy="697" r="26" />
