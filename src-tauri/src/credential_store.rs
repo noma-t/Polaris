@@ -3,6 +3,7 @@
 
 use keyring::Entry;
 
+use crate::auth_log;
 use crate::vrchat_client::AuthError;
 
 const SERVICE_NAME: &str = "com.polaris.vsuifinder";
@@ -17,20 +18,35 @@ fn to_auth_error(err: keyring::Error) -> AuthError {
 }
 
 pub fn save_session(cookies: &str) -> Result<(), AuthError> {
-    session_entry()?.set_password(cookies).map_err(to_auth_error)
+    let result = session_entry()?.set_password(cookies).map_err(to_auth_error);
+    match &result {
+        Ok(()) => auth_log::log!("credential store: saved session"),
+        Err(err) => auth_log::log!("credential store: failed to save session: {err}"),
+    }
+    result
 }
 
 pub fn load_session() -> Result<Option<String>, AuthError> {
     match session_entry()?.get_password() {
         Ok(cookies) => Ok(Some(cookies)),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(err) => Err(to_auth_error(err)),
+        Err(err) => {
+            auth_log::log!("credential store: failed to load session: {err}");
+            Err(to_auth_error(err))
+        }
     }
 }
 
 pub fn delete_session() -> Result<(), AuthError> {
     match session_entry()?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(err) => Err(to_auth_error(err)),
+        Ok(()) => {
+            auth_log::log!("credential store: deleted session");
+            Ok(())
+        }
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) => {
+            auth_log::log!("credential store: failed to delete session: {err}");
+            Err(to_auth_error(err))
+        }
     }
 }

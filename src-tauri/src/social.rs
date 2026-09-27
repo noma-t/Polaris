@@ -11,6 +11,7 @@ use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 
+use crate::auth_log;
 use crate::background;
 use crate::instance_store;
 use crate::pipeline::{self, PipelineEvent};
@@ -576,8 +577,14 @@ impl Session {
     }
 
     fn handle_error(&self, error: &AuthError) {
-        if matches!(error, AuthError::Unauthorized) && self.with_store(|_| ()).is_some() {
+        if !matches!(error, AuthError::Unauthorized) {
+            return;
+        }
+        if self.with_store(|_| ()).is_some() {
+            auth_log::log!("session: unauthorized; notifying session-expired");
             let _ = self.app.emit(SESSION_EXPIRED_EVENT, ());
+        } else {
+            auth_log::log!("session: unauthorized after sign-out; ignored");
         }
     }
 
@@ -748,7 +755,10 @@ impl Session {
             delay = match self.fetch_group_instances().await {
                 Ok(list) => group_instances_refresh_delay(list.fetched_at, now_epoch_ms()),
                 Err(AuthError::RateLimited) => RATE_LIMIT_PAUSE + GROUP_INSTANCES_REFRESH_INTERVAL,
-                Err(AuthError::Unauthorized) => return,
+                Err(AuthError::Unauthorized) => {
+                    auth_log::log!("background poll: stopped (unauthorized)");
+                    return;
+                }
                 Err(_) => GROUP_INSTANCES_REFRESH_INTERVAL,
             };
         }

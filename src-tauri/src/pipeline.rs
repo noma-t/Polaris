@@ -9,6 +9,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::header, Message};
 
+use crate::auth_log;
 use crate::vrchat_client::{VrchatClient, USER_AGENT};
 use crate::vrchat_models::{ApiFriend, ApiWorld};
 
@@ -114,6 +115,7 @@ pub async fn run(client: VrchatClient, tx: mpsc::Sender<PipelineEvent>) {
                 }
             }
         }
+        auth_log::log!("pipeline: reconnecting in {}s", delay.as_secs());
         tokio::time::sleep(delay).await;
         delay = (delay * 2).min(RECONNECT_MAX_DELAY);
     }
@@ -127,6 +129,7 @@ enum ListenOutcome {
 async fn connect_and_listen(client: &VrchatClient, tx: &mpsc::Sender<PipelineEvent>) -> ListenOutcome {
     let disconnected = ListenOutcome::Disconnected { was_connected: false };
     let Some(token) = client.auth_token() else {
+        auth_log::log!("pipeline: no auth cookie cookies=[{}]", client.cookie_names().join(", "));
         return disconnected;
     };
     let url = format!("{PIPELINE_URL}?authToken={}", urlencoding::encode(&token));
@@ -135,9 +138,15 @@ async fn connect_and_listen(client: &VrchatClient, tx: &mpsc::Sender<PipelineEve
     };
     request.headers_mut().insert(header::USER_AGENT, header::HeaderValue::from_static(USER_AGENT));
 
-    let Ok((mut stream, _)) = tokio_tungstenite::connect_async(request).await else {
-        return disconnected;
+    // URL は認証トークンを含むので記録しない
+    let mut stream = match tokio_tungstenite::connect_async(request).await {
+        Ok((stream, _)) => stream,
+        Err(err) => {
+            auth_log::log!("pipeline: failed to connect: {err}");
+            return disconnected;
+        }
     };
+    auth_log::log!("pipeline: connected");
     if tx.send(PipelineEvent::Connected).await.is_err() {
         return ListenOutcome::ReceiverClosed;
     }
@@ -146,7 +155,14 @@ async fn connect_and_listen(client: &VrchatClient, tx: &mpsc::Sender<PipelineEve
     while let Some(message) = stream.next().await {
         let text = match message {
             Ok(Message::Text(text)) => text,
-            Ok(Message::Close(_)) | Err(_) => break,
+            Ok(Message::Close(frame)) => {
+                auth_log::log!("pipeline: closed by server {frame:?}");
+                break;
+            }
+            Err(err) => {
+                auth_log::log!("pipeline: connection error: {err}");
+                break;
+            }
             Ok(_) => continue,
         };
         if let Some(event) = parse_message(&text) {
@@ -155,6 +171,7 @@ async fn connect_and_listen(client: &VrchatClient, tx: &mpsc::Sender<PipelineEve
             }
         }
     }
+    auth_log::log!("pipeline: disconnected");
     ListenOutcome::Disconnected { was_connected: true }
 }
 

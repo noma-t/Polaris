@@ -1,4 +1,5 @@
 mod auth_commands;
+mod auth_log;
 mod background;
 mod credential_store;
 mod game_monitor;
@@ -46,6 +47,7 @@ pub fn run() {
         .manage(BackgroundState::new())
         .setup(|app| {
             let settings = settings_store::load_app_settings(app.handle());
+            auth_log::init(app.handle(), settings.is_auth_logging_enabled());
             app.state::<GameState>().start_monitor(app.handle().clone(), settings.launcher_path);
             background::apply(app.handle(), settings.run_in_background);
             background::sync_autostart(app.handle(), settings.launch_at_startup);
@@ -66,6 +68,7 @@ pub fn run() {
             auth_commands::auth_verify_two_factor,
             auth_commands::auth_restore_session,
             auth_commands::auth_logout,
+            auth_log::auth_log_open_folder,
             social_commands::social_get_friends,
             social_commands::social_get_groups,
             social_commands::social_get_group_instances,

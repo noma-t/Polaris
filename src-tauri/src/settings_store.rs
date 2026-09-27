@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
+use crate::auth_log;
 use crate::background;
 use crate::game_monitor::GameState;
 use crate::vrchat_client::AuthError;
@@ -29,10 +30,18 @@ pub struct AppSettings {
     pub simulate_update_available: bool,
     /// サムネイル撮影用に、実 Friends を隠してダミーの Friends を表示する (developer_mode が有効な場合のみ効く)
     pub thumbnail_mode: bool,
+    /// VRChat API へのリクエストと認証まわりの出来事を `auth.log` に記録する (developer_mode が有効な場合のみ効く)
+    pub auth_logging: bool,
     /// × でシステムトレイに格納し、ウィンドウを閉じている間もグループインスタンスの観測を続ける
     pub run_in_background: bool,
     /// OS へのログイン時に Polaris を起動する
     pub launch_at_startup: bool,
+}
+
+impl AppSettings {
+    pub fn is_auth_logging_enabled(&self) -> bool {
+        self.developer_mode && self.auth_logging
+    }
 }
 
 impl Default for AppSettings {
@@ -42,6 +51,7 @@ impl Default for AppSettings {
             developer_mode: false,
             simulate_update_available: false,
             thumbnail_mode: false,
+            auth_logging: false,
             run_in_background: false,
             launch_at_startup: false,
         }
@@ -170,7 +180,7 @@ pub fn settings_load_app(app: AppHandle, state: State<'_, SettingsState>) -> Res
 }
 
 /// 自動起動の登録に失敗した場合は保存しない。
-/// 保存後、次の poll を待たずに launch.exe の存在確認とバックグラウンド実行の設定を反映する
+/// 保存後、次の poll を待たずに launch.exe の存在確認・バックグラウンド実行・認証ログの設定を反映する
 #[tauri::command]
 pub fn settings_save_app(
     app: AppHandle,
@@ -187,10 +197,12 @@ pub fn settings_save_app(
     }
     let launcher_path = settings.launcher_path.clone();
     let run_in_background = settings.run_in_background;
+    let is_auth_logging_enabled = settings.is_auth_logging_enabled();
     file.app = settings;
     write_file(&path, &file)?;
     game.set_launcher_path(&app, launcher_path);
     background::apply(&app, run_in_background);
+    auth_log::set_enabled(is_auth_logging_enabled);
     Ok(())
 }
 

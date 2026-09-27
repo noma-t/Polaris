@@ -20,7 +20,7 @@ import { useUserSettings } from "./hooks/useUserSettings";
 import { useToast } from "./hooks/useToast";
 import { useUiState } from "./hooks/useUiState";
 import { useUpdater } from "./hooks/useUpdater";
-import { logout, restoreSession, type CurrentUser } from "./lib/auth";
+import { logout, restoreSession, type CurrentUser, type SignOutReason } from "./lib/auth";
 import { formatClock } from "./lib/format";
 import { openInstanceDisabledReason, openInstanceInGame } from "./lib/game";
 import { AboutScreen } from "./screens/AboutScreen";
@@ -75,7 +75,7 @@ export default function App() {
     pinnedFriendIds,
     onSessionExpired: () => {
       showToast("Session expired. Please sign in again.", "error");
-      void signOut();
+      void signOut("sessionExpired");
     },
   });
   /** Thumbnail mode 中は実 Friends を隠し、ダミーだけを表示する (Rust 側へ送る pinned や保存される設定は実データのまま) */
@@ -122,9 +122,9 @@ export default function App() {
     };
   }, []);
 
-  const signOut = async () => {
+  const signOut = async (reason: SignOutReason) => {
     try {
-      await logout();
+      await logout(reason);
     } catch {
       showToast("Failed to clear the saved session", "error");
     }
@@ -187,7 +187,7 @@ export default function App() {
               canExpand={layoutWidth >= SIDEBAR_EXPANDABLE_MIN_WIDTH}
               badgedScreens={updater.isUpdateAvailable ? ["settings"] : []}
               onNavigate={navigate}
-              onSignOut={signOut}
+              onSignOut={() => void signOut("user")}
             />
 
             <main className="main-scroll">
