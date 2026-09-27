@@ -71,7 +71,8 @@ export function GroupsPanel({
           <div className="sort-toggle" role="group" aria-label="Sort">
             {SORT_OPTIONS.map(({ key, label }) => {
               const isActive = sort.key === key;
-              const isDescending = key === "users" ? sort.usersDir === "desc" : sort.createdDir === "new";
+              // Users は多い順、Created は古い順のときに下向き矢印を出す (Created は上向きで新しいものが上)
+              const isArrowDown = key === "users" ? sort.usersDir === "desc" : sort.createdDir === "old";
               return (
                 <button
                   key={key}
@@ -80,7 +81,7 @@ export function GroupsPanel({
                   aria-pressed={isActive}
                 >
                   <span className="sort-toggle-label">{label}</span>
-                  <ChevronDownIcon size={20} className="sort-toggle-direction" style={{ transform: isDescending ? "none" : "rotate(180deg)" }} />
+                  <ChevronDownIcon size={20} className="sort-toggle-direction" style={{ transform: isArrowDown ? "none" : "rotate(180deg)" }} />
                 </button>
               );
             })}
