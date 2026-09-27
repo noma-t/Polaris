@@ -318,8 +318,8 @@ impl SocialStore {
     ) -> (Vec<GroupInstanceView>, HashMap<String, SeenInstance>) {
         let instances: Vec<_> = instances.into_iter().filter(|inst| !inst.location.is_empty() && !inst.world_name.is_empty()).collect();
         let mut seen = HashMap::new();
-        // API はおおむね作成が新しい順に返すので、初めて見るインスタンスには末尾 (古い方) から順に値を振る
-        for inst in instances.iter().rev() {
+        // API はおおむね作成が古い順に返すので、初めて見るインスタンスには先頭から順に値を振り、末尾ほど新しくする
+        for inst in &instances {
             if seen.contains_key(&inst.location) {
                 continue;
             }
@@ -701,14 +701,14 @@ mod tests {
         assert_eq!(views[1].first_seen_at, 200);
         assert_eq!(views[1].access_type, "members");
         // 既知の wrld_a:2 は初回の値のまま、初めて見る wrld_a:3 だけ既存より新しい値になる
-        assert_eq!(views.iter().map(|v| v.created_order).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(views.iter().map(|v| v.created_order).collect::<Vec<_>>(), [2, 3]);
         assert!(!store.instance_seen.contains_key("wrld_a:1"));
     }
 
     #[test]
     fn keeps_created_order_of_known_instances_on_group_refresh() {
         let mut store = SocialStore::default();
-        store.apply_group_instances(vec![api_instance("wrld_a:2~group(grp_1)", "public"), api_instance("wrld_a:1~group(grp_1)", "public")], 100);
+        store.apply_group_instances(vec![api_instance("wrld_a:1~group(grp_1)", "public"), api_instance("wrld_a:2~group(grp_1)", "public")], 100);
 
         // 1 グループ分の API はレスポンス順が異なっても既知の順序を変えない
         let views = store.apply_instances_of_group(
