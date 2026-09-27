@@ -62,6 +62,8 @@ pub struct ApiUserGroup {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ApiGroupInstanceList {
+    /// VRChat 側でこの一覧が取得された時刻 (RFC 3339)
+    pub fetched_at: String,
     pub instances: Vec<ApiInstance>,
 }
 

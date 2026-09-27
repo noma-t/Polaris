@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::TimeZone;
 use serde::Serialize;
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter};
@@ -25,9 +26,10 @@ const WORLD_FETCH_INTERVAL: Duration = Duration::from_secs(1);
 const WORLD_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// 429 を受けたときに World 名の取得を止める時間
 const RATE_LIMIT_PAUSE: Duration = Duration::from_secs(60);
-/// バックグラウンド中にグループインスタンスを取得する間隔 (フロントエンドの自動更新と揃える)
-const BACKGROUND_POLL_BASE: Duration = Duration::from_secs(60);
-const BACKGROUND_POLL_JITTER_MS: u64 = 15_000;
+/// fetchedAt から次にグループインスタンスを全体取得するまでの間隔 (フロントエンドの自動更新と揃える)
+const GROUP_INSTANCES_REFRESH_INTERVAL: Duration = Duration::from_secs(90);
+/// 端末と VRChat の時計のずれで fetchedAt + 間隔 が過ぎていても、連続取得しないよう最低限空ける時間
+const GROUP_INSTANCES_MIN_REFRESH_DELAY: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -162,6 +164,15 @@ pub struct GroupInstanceView {
     created_order: u32,
 }
 
+/// 全グループ分のグループインスタンス取得結果
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupInstanceListView {
+    /// VRChat 側でこの一覧が取得された時刻 (epoch ms)。レスポンスから読めなければ Polaris が受け取った時刻
+    fetched_at: i64,
+    instances: Vec<GroupInstanceView>,
+}
+
 /// フレンドがいるインスタンス 1 件分の詳細表示用データ
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -243,6 +254,73 @@ struct ObservedGroupInstance {
 
 fn now_epoch_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+}
+
+/// RFC 3339 形式 (`2024-05-01T12:34:56.789Z` / `…+09:00`) の日時を epoch ms に変換する。
+/// crate を増やさないよう、VRChat API が返す形式に必要な範囲だけ自前で parse する
+fn parse_rfc3339_ms(text: &str) -> Option<i64> {
+    let bytes = text.as_bytes();
+    let digits = |s: &str| -> Option<i64> { s.bytes().all(|c| c.is_ascii_digit()).then(|| s.parse().ok()).flatten() };
+    let number = |start: usize, len: usize| digits(text.get(start..start + len)?);
+    let is_separator = |index: usize, expected: &[u8]| bytes.get(index).is_some_and(|c| expected.contains(c));
+    if !(is_separator(4, b"-") && is_separator(7, b"-") && is_separator(10, b"Tt ") && is_separator(13, b":") && is_separator(16, b":")) {
+        return None;
+    }
+    let (year, month, day) = (number(0, 4)?, number(5, 2)?, number(8, 2)?);
+    let (hour, minute, second) = (number(11, 2)?, number(14, 2)?, number(17, 2)?);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+
+    let mut rest = text.get(19..)?;
+    let mut millis = 0;
+    if let Some(fraction) = rest.strip_prefix('.') {
+        let len = fraction.bytes().take_while(u8::is_ascii_digit).count();
+        if len == 0 {
+            return None;
+        }
+        // ms より細かい桁は切り捨てる
+        let head = &fraction[..len.min(3)];
+        millis = head.parse::<i64>().ok()? * 10_i64.pow(3 - head.len() as u32);
+        rest = &fraction[len..];
+    }
+    let offset_minutes = match rest.as_bytes() {
+        [b'Z' | b'z'] => 0,
+        [sign @ (b'+' | b'-'), _, _, b':', _, _] => {
+            let minutes = digits(&rest[1..3])? * 60 + digits(&rest[4..6])?;
+            if *sign == b'+' { minutes } else { -minutes }
+        }
+        _ => return None,
+    };
+
+    let seconds = days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second - offset_minutes * 60;
+    Some(seconds * 1_000 + millis)
+}
+
+/// 1970-01-01 からの日数 (proleptic Gregorian calendar)
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// epoch ms をログ用に端末のタイムゾーンの時刻 (`2024-05-01 21:34:56.789 +09:00`) にする
+fn format_local_time(epoch_ms: i64) -> String {
+    chrono::Local
+        .timestamp_millis_opt(epoch_ms)
+        .single()
+        .map_or_else(|| epoch_ms.to_string(), |time| time.format("%Y-%m-%d %H:%M:%S%.3f %:z").to_string())
+}
+
+/// fetchedAt から次にグループインスタンスを全体取得するまでの待ち時間。
+/// 端末と VRChat の時計がずれていても連続取得や長すぎる待ちにならないよう、[最低限空ける時間, 取得間隔] に収める
+fn group_instances_refresh_delay(fetched_at_ms: i64, now_ms: i64) -> Duration {
+    let interval_ms = GROUP_INSTANCES_REFRESH_INTERVAL.as_millis() as i64;
+    let min_ms = GROUP_INSTANCES_MIN_REFRESH_DELAY.as_millis() as i64;
+    Duration::from_millis((fetched_at_ms + interval_ms - now_ms).clamp(min_ms, interval_ms) as u64)
 }
 
 #[derive(Default)]
@@ -571,7 +649,7 @@ impl Session {
     }
 
     /// 所属する全グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
-    async fn fetch_group_instances(&self) -> Result<Vec<GroupInstanceView>, AuthError> {
+    async fn fetch_group_instances(&self) -> Result<GroupInstanceListView, AuthError> {
         let list = match self.client.get_user_group_instances(&self.user_id).await {
             Ok(list) => list,
             Err(error) => {
@@ -579,7 +657,20 @@ impl Session {
                 return Err(error);
             }
         };
-        self.with_store(|store| store.apply_group_instances(list.instances, now_epoch_ms()))
+        let now_ms = now_epoch_ms();
+        let parsed = parse_rfc3339_ms(&list.fetched_at);
+        let fetched_at = parsed.unwrap_or(now_ms);
+        let next_in = group_instances_refresh_delay(fetched_at, now_ms).as_secs_f64();
+        match parsed {
+            Some(ms) => eprintln!(
+                "[group-instances] fetchedAt={} (raw={:?}, age={:.1}s, next in {next_in:.1}s)",
+                format_local_time(ms),
+                list.fetched_at,
+                (now_ms - ms) as f64 / 1000.0,
+            ),
+            None => eprintln!("[group-instances] fetchedAt={:?} (unparsed; using local time, next in {next_in:.1}s)", list.fetched_at),
+        }
+        self.with_store(|store| GroupInstanceListView { fetched_at, instances: store.apply_group_instances(list.instances, now_ms) })
             .ok_or(AuthError::Unauthorized)
     }
 
@@ -632,20 +723,21 @@ impl Session {
     }
 
     /// Run in background でウィンドウが見えていない間、グループインスタンスを定期取得して初めて観測した時刻を記録し続ける
+    /// 次の取得は fetchedAt + 取得間隔 に行い、取得できなかったときは取得間隔だけ待つ
     async fn run_background_group_poll(self) {
+        let mut delay = GROUP_INSTANCES_REFRESH_INTERVAL;
         loop {
-            // 乱数 crate を増やさないよう、現在時刻の端数を jitter に使う
-            let jitter_ms = u64::from(SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.subsec_nanos())) % BACKGROUND_POLL_JITTER_MS;
-            tokio::time::sleep(BACKGROUND_POLL_BASE + Duration::from_millis(jitter_ms)).await;
+            tokio::time::sleep(delay).await;
             if !background::should_poll_in_background(&self.app) {
+                delay = GROUP_INSTANCES_REFRESH_INTERVAL;
                 continue;
             }
-            match self.fetch_group_instances().await {
-                Ok(_) => {}
-                Err(AuthError::RateLimited) => tokio::time::sleep(RATE_LIMIT_PAUSE).await,
+            delay = match self.fetch_group_instances().await {
+                Ok(list) => group_instances_refresh_delay(list.fetched_at, now_epoch_ms()),
+                Err(AuthError::RateLimited) => RATE_LIMIT_PAUSE + GROUP_INSTANCES_REFRESH_INTERVAL,
                 Err(AuthError::Unauthorized) => return,
-                Err(_) => {}
-            }
+                Err(_) => GROUP_INSTANCES_REFRESH_INTERVAL,
+            };
         }
     }
 
@@ -724,7 +816,7 @@ impl SocialState {
     }
 
     /// 所属する全グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
-    pub async fn fetch_group_instances(&self) -> Result<Vec<GroupInstanceView>, AuthError> {
+    pub async fn fetch_group_instances(&self) -> Result<GroupInstanceListView, AuthError> {
         let session = self.session.lock().expect("social session poisoned").clone().ok_or(AuthError::Unauthorized)?;
         session.fetch_group_instances().await
     }
@@ -979,6 +1071,36 @@ mod tests {
         let mut not_group = api_instance("wrld_a:1", "public");
         not_group.owner_id = "usr_1".into();
         assert!(store.apply_group_instances(vec![not_group], 100).is_empty());
+    }
+
+    #[test]
+    fn parses_rfc3339_fetched_at() {
+        assert_eq!(parse_rfc3339_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_rfc3339_ms("2024-05-01T12:34:56.789Z"), Some(1_714_566_896_789));
+        assert_eq!(parse_rfc3339_ms("2024-05-01T12:34:56Z"), Some(1_714_566_896_000));
+        assert_eq!(parse_rfc3339_ms("2024-05-01T12:34:56.7Z"), Some(1_714_566_896_700));
+        assert_eq!(parse_rfc3339_ms("2024-05-01T12:34:56.789123Z"), Some(1_714_566_896_789));
+        assert_eq!(parse_rfc3339_ms("2024-05-01T21:34:56.789+09:00"), Some(1_714_566_896_789));
+        assert_eq!(parse_rfc3339_ms("2024-05-01T07:04:56.789-05:30"), Some(1_714_566_896_789));
+        assert_eq!(parse_rfc3339_ms("2024-02-29T00:00:00Z"), Some(1_709_164_800_000));
+    }
+
+    #[test]
+    fn rejects_malformed_fetched_at() {
+        for text in ["", "2024-05-01", "2024-05-01T12:34:56", "2024-13-01T00:00:00Z", "2024-05-01T12:34:56.Z", "2024-05-01T12:34:56+0900", "2024-05-01T12:34:5xZ"] {
+            assert_eq!(parse_rfc3339_ms(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn schedules_next_group_poll_from_fetched_at() {
+        let now = 1_000_000;
+        assert_eq!(group_instances_refresh_delay(now, now), Duration::from_secs(90));
+        assert_eq!(group_instances_refresh_delay(now - 30_000, now), Duration::from_secs(60));
+        // 時計のずれで予定が過ぎていても連続取得しない
+        assert_eq!(group_instances_refresh_delay(now - 120_000, now), Duration::from_secs(10));
+        // fetchedAt が未来でも取得間隔より長くは待たない
+        assert_eq!(group_instances_refresh_delay(now + 60_000, now), Duration::from_secs(90));
     }
 
     #[test]

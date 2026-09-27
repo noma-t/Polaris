@@ -42,6 +42,12 @@ export interface GroupInstance {
   createdOrder: number;
 }
 
+export interface GroupInstanceList {
+  /** VRChat 側でこの一覧が取得された時刻 (epoch ms)。レスポンスから読めなければ Polaris が受け取った時刻 */
+  fetchedAt: number;
+  instances: GroupInstance[];
+}
+
 export type InstanceType = "public" | "friendsPlus" | "friends" | "invitePlus" | "invite" | "groupPublic" | "groupPlus" | "group";
 
 export const INSTANCE_TYPE_LABELS: Record<InstanceType, string> = {
@@ -71,7 +77,7 @@ export interface InstanceDetail {
 
 export const getFriends = () => invoke<Friend[]>("social_get_friends");
 export const getGroups = () => invoke<Group[]>("social_get_groups");
-export const getGroupInstances = () => invoke<GroupInstance[]>("social_get_group_instances");
+export const getGroupInstances = () => invoke<GroupInstanceList>("social_get_group_instances");
 export const getInstancesOfGroup = (groupId: string) => invoke<GroupInstance[]>("social_get_instances_of_group", { groupId });
 export const getInstanceDetail = (location: string) => invoke<InstanceDetail>("social_get_instance_detail", { location });
 export const setPinnedFriends = (ids: string[]) => invoke<void>("social_set_pinned_friends", { ids });

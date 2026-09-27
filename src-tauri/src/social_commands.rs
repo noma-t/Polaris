@@ -2,7 +2,7 @@
 
 use tauri::{AppHandle, Emitter, State};
 
-use crate::social::{FriendView, GroupInstanceView, GroupView, InstanceDetailView, SocialState, FRIENDS_UPDATED_EVENT};
+use crate::social::{FriendView, GroupInstanceListView, GroupInstanceView, GroupView, InstanceDetailView, SocialState, FRIENDS_UPDATED_EVENT};
 use crate::vrchat_client::AuthError;
 
 /// listen 開始前に emit された分を取りこぼさないよう、初期表示時に現在の snapshot を返す
@@ -18,7 +18,7 @@ pub fn social_get_groups(state: State<'_, SocialState>) -> Vec<GroupView> {
 
 /// 所属する全グループのインスタンスを VRChat API から取得する
 #[tauri::command]
-pub async fn social_get_group_instances(state: State<'_, SocialState>) -> Result<Vec<GroupInstanceView>, AuthError> {
+pub async fn social_get_group_instances(state: State<'_, SocialState>) -> Result<GroupInstanceListView, AuthError> {
     state.fetch_group_instances().await
 }
 
