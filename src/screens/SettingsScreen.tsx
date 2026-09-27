@@ -55,6 +55,12 @@ export function SettingsScreen({ version, appSettings, onUpdateAppSettings, upda
               void saveAppSettings({ simulateUpdateAvailable }, "Failed to save Simulate available update")
             }
           />
+          <ToggleSettingRow
+            title="Thumbnail mode"
+            description="Replace friends with dummy data for thumbnail screenshots. Real friends are hidden, and your pinned friends are kept."
+            isOn={appSettings.thumbnailMode}
+            onToggle={(thumbnailMode) => void saveAppSettings({ thumbnailMode }, "Failed to save Thumbnail mode")}
+          />
         </div>
       )}
     </div>

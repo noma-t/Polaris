@@ -8,6 +8,7 @@ import { Toast } from "./components/Toast";
 import { VisibilityDialog, type VisibilityKind } from "./components/VisibilityDialog";
 import type { NavScreen, Screen } from "./components/navigation";
 import { MOCK_RATE_LIMITED } from "./data/mock";
+import { isDummyLocation, THUMBNAIL_FRIENDS, THUMBNAIL_PINNED_IDS } from "./data/thumbnailFriends";
 import type { VsuiGroup } from "./data/vsuiGroups";
 import { useAppSettings } from "./hooks/useAppSettings";
 import { useAppVersion } from "./hooks/useAppVersion";
@@ -77,6 +78,20 @@ export default function App() {
       void signOut();
     },
   });
+  /** Thumbnail mode 中は実 Friends を隠し、ダミーだけを表示する (Rust 側へ送る pinned や保存される設定は実データのまま) */
+  const isThumbnailMode = (appSettings?.developerMode && appSettings.thumbnailMode) ?? false;
+  /** Thumbnail mode 中の pin 状態。保存せず、Thumbnail mode に入るたびに初期値へ戻す */
+  const [thumbnailPinnedIds, setThumbnailPinnedIds] = useState(THUMBNAIL_PINNED_IDS);
+  useEffect(() => {
+    if (isThumbnailMode) setThumbnailPinnedIds(THUMBNAIL_PINNED_IDS);
+  }, [isThumbnailMode]);
+  const toggleThumbnailPinnedFriend = useCallback(
+    (id: string) => setThumbnailPinnedIds((prev) => ({ ...prev, [id]: !prev[id] })),
+    [],
+  );
+  const displayedFriends = isThumbnailMode ? THUMBNAIL_FRIENDS : friends;
+  const displayedPinnedFriendIds = isThumbnailMode ? thumbnailPinnedIds : pinnedFriendIds;
+  const onToggleDisplayedFriend = isThumbnailMode ? toggleThumbnailPinnedFriend : togglePinnedFriend;
   const changeSort = useCallback((sort: SortState) => updateUiState({ sort }), [updateUiState]);
   const hasOpenGroup = screen === "instances" && groups.some((g) => shownGroupIds[g.id] && !collapsedGroupIds[g.id]);
   const groupState = useGroupInstances({
@@ -143,6 +158,7 @@ export default function App() {
 
   const closeVisibilityDialog = useCallback(() => setVisibilityDialog(null), []);
   const openInVRChat = (location: string, label: string) => {
+    if (isDummyLocation(location)) return showToast(`“${label}” is a dummy instance (Thumbnail mode)`);
     openInstanceInGame(location)
       .then(() => showToast(`Opened “${label}” in VRChat`))
       .catch(() => showToast(`Failed to open “${label}” in VRChat`, "error"));
@@ -186,10 +202,10 @@ export default function App() {
 
                   {screen === "instances" && (
                     <InstancesScreen
-                      friends={friends}
+                      friends={displayedFriends}
                       groups={groups}
                       groupState={groupState}
-                      pinnedFriendIds={pinnedFriendIds}
+                      pinnedFriendIds={displayedPinnedFriendIds}
                       shownGroupIds={shownGroupIds}
                       collapsedGroupIds={collapsedGroupIds}
                       onToggleGroupCollapsed={toggleGroupCollapsed}
@@ -228,11 +244,11 @@ export default function App() {
       {screen === "instances" && visibilityDialog && (
         <VisibilityDialog
           kind={visibilityDialog}
-          friends={friends}
+          friends={displayedFriends}
           groups={groups}
-          pinnedFriendIds={pinnedFriendIds}
+          pinnedFriendIds={displayedPinnedFriendIds}
           shownGroupIds={shownGroupIds}
-          onToggleFriend={togglePinnedFriend}
+          onToggleFriend={onToggleDisplayedFriend}
           onToggleGroup={toggleShownGroup}
           onClose={closeVisibilityDialog}
         />

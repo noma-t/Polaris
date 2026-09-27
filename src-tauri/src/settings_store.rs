@@ -26,6 +26,8 @@ pub struct AppSettings {
     pub developer_mode: bool,
     /// 通信せずにダミーの update を表示する (developer_mode が有効な場合のみ効く)
     pub simulate_update_available: bool,
+    /// サムネイル撮影用に、実 Friends を隠してダミーの Friends を表示する (developer_mode が有効な場合のみ効く)
+    pub thumbnail_mode: bool,
 }
 
 impl Default for AppSettings {
@@ -34,6 +36,7 @@ impl Default for AppSettings {
             launcher_path: DEFAULT_LAUNCHER_PATH.to_owned(),
             developer_mode: false,
             simulate_update_available: false,
+            thumbnail_mode: false,
         }
     }
 }
