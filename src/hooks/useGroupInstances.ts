@@ -51,6 +51,8 @@ export function useGroupInstances({ isSignedIn, hasOpenGroup, sort, onSortChange
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const isFetchingRef = useRef(false);
   const nextAutoRef = useRef(0);
+  /** 手動更新で最新のデータを取得した時刻 (取得開始時)。これより古い fetchedAt の全体取得の結果は反映しない。0 なら制限なし */
+  const manualRefreshedAtRef = useRef(0);
   /** reset のたびに進め、サインアウト前に始まった取得の結果を捨てる */
   const sessionRef = useRef(0);
   const onErrorRef = useRef(onError);
@@ -69,11 +71,16 @@ export function useGroupInstances({ isSignedIn, hasOpenGroup, sort, onSortChange
         const list = await getGroupInstances();
         if (session !== sessionRef.current) return;
         fetchedAt = list.fetchedAt;
+        // 手動更新より古いキャッシュが返ってきたときは、新しいデータを上書きしないよう捨てて再試行を待つ
+        if (fetchedAt < manualRefreshedAtRef.current) return;
+        manualRefreshedAtRef.current = 0;
         setInstancesByGroup(groupByGroupId(list.instances));
         setHasLoadFailed(false);
       } else {
+        const startedAt = Date.now();
         const instances = await getInstancesOfGroup(groupId);
         if (session !== sessionRef.current) return;
+        manualRefreshedAtRef.current = startedAt;
         setInstancesByGroup((prev) => prev && { ...prev, [groupId]: instances });
       }
       setUpdatedAt(Date.now());
@@ -138,6 +145,7 @@ export function useGroupInstances({ isSignedIn, hasOpenGroup, sort, onSortChange
     sessionRef.current += 1;
     isFetchingRef.current = false;
     nextAutoRef.current = 0;
+    manualRefreshedAtRef.current = 0;
     setCooldownUntil(0);
     setInstancesByGroup(null);
     setIsLoading(false);
