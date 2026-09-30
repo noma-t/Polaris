@@ -29,7 +29,7 @@ const WORLD_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// 429 を受けたときに World 名の取得を止める時間
 const RATE_LIMIT_PAUSE: Duration = Duration::from_secs(60);
 /// fetchedAt から次にグループインスタンスを全体取得するまでの間隔 (フロントエンドの自動更新と揃える)
-const GROUP_INSTANCES_REFRESH_INTERVAL: Duration = Duration::from_secs(90);
+const GROUP_INSTANCES_REFRESH_INTERVAL: Duration = Duration::from_secs(120);
 /// 端末と VRChat の時計のずれで fetchedAt + 間隔 が過ぎていても、連続取得しないよう最低限空ける時間
 const GROUP_INSTANCES_MIN_REFRESH_DELAY: Duration = Duration::from_secs(10);
 
@@ -1170,12 +1170,12 @@ mod tests {
     #[test]
     fn schedules_next_group_poll_from_fetched_at() {
         let now = 1_000_000;
-        assert_eq!(group_instances_refresh_delay(now, now), Duration::from_secs(90));
-        assert_eq!(group_instances_refresh_delay(now - 30_000, now), Duration::from_secs(60));
+        assert_eq!(group_instances_refresh_delay(now, now), Duration::from_secs(120));
+        assert_eq!(group_instances_refresh_delay(now - 30_000, now), Duration::from_secs(90));
         // 時計のずれで予定が過ぎていても連続取得しない
-        assert_eq!(group_instances_refresh_delay(now - 120_000, now), Duration::from_secs(10));
+        assert_eq!(group_instances_refresh_delay(now - 150_000, now), Duration::from_secs(10));
         // fetchedAt が未来でも取得間隔より長くは待たない
-        assert_eq!(group_instances_refresh_delay(now + 60_000, now), Duration::from_secs(90));
+        assert_eq!(group_instances_refresh_delay(now + 60_000, now), Duration::from_secs(120));
     }
 
     #[test]

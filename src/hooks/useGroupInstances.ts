@@ -12,7 +12,7 @@ export interface SortState {
 /** 手動更新の全体共通クールダウン (秒) */
 export const REFRESH_COOLDOWN_SEC = 3;
 /** fetchedAt から次の自動更新までの間隔 (Rust 側のバックグラウンド取得と揃える) */
-const AUTO_REFRESH_INTERVAL_MS = 90_000;
+const AUTO_REFRESH_INTERVAL_MS = 120_000;
 /** 端末と VRChat の時計のずれで fetchedAt + 間隔 が過ぎていても、連続取得しないよう最低限空ける時間 */
 const AUTO_REFRESH_MIN_DELAY_MS = 10_000;
 
