@@ -23,9 +23,11 @@ impl AuthState {
         self.0.lock().expect("auth state poisoned").clone()
     }
 
+    /// 古いクライアントの通信が後から終わっても、保存済みセッションを書き換えないよう追従を止めて作り直す
     fn reset(&self) -> VrchatClient {
         let client = VrchatClient::new();
-        *self.0.lock().expect("auth state poisoned") = client.clone();
+        let previous = std::mem::replace(&mut *self.0.lock().expect("auth state poisoned"), client.clone());
+        previous.stop_tracking_saved_session();
         client
     }
 }
@@ -37,9 +39,14 @@ pub enum LoginResult {
     RequiresTwoFactor { methods: Vec<TwoFactorMethod> },
 }
 
+/// ログイン完了時に cookie を保存し、以降 VRChat が cookie を更新したら保存済みの cookie も追従させる
 fn persist_session(client: &VrchatClient) -> Result<(), AuthError> {
     match client.export_cookies() {
-        Some(cookies) => credential_store::save_session(&cookies),
+        Some(cookies) => {
+            credential_store::save_session(&cookies)?;
+            client.track_saved_session(cookies);
+            Ok(())
+        }
         None => Err(AuthError::Unexpected("No session cookie was issued by VRChat.".into())),
     }
 }
@@ -137,6 +144,7 @@ pub async fn auth_restore_session(
     match response {
         AuthUserResponse::SignedIn(user) => {
             auth_log::log!("restore: signed in as {}", user.id);
+            client.track_saved_session(cookies);
             social.start(app, client, user.id.clone());
             Ok(Some(user))
         }
@@ -163,8 +171,11 @@ pub enum SignOutReason {
 pub async fn auth_logout(state: State<'_, AuthState>, social: State<'_, SocialState>, reason: SignOutReason) -> Result<(), AuthError> {
     auth_log::log!("logout: reason={reason:?}");
     social.stop();
+    let client = state.client();
+    // ログアウト API が cookie を消去して返しても、保存済みセッションを上書きしない
+    client.stop_tracking_saved_session();
     // API 側の失敗 (オフライン等) に関わらずローカルのセッションは必ず破棄する
-    let _ = state.client().logout().await;
+    let _ = client.logout().await;
     state.reset();
     credential_store::delete_session()
 }

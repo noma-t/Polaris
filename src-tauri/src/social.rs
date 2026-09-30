@@ -15,7 +15,7 @@ use crate::auth_log;
 use crate::background;
 use crate::instance_store;
 use crate::pipeline::{self, PipelineEvent};
-use crate::vrchat_client::{AuthError, VrchatClient, FRIENDS_PAGE_SIZE};
+use crate::vrchat_client::{AuthError, AuthUserResponse, VrchatClient, FRIENDS_PAGE_SIZE};
 use crate::vrchat_models::{ApiFriend, ApiGroupInstance, ApiInstance, ApiInstanceDetail};
 
 pub const FRIENDS_UPDATED_EVENT: &str = "social://friends-updated";
@@ -547,6 +547,12 @@ impl SocialStore {
     }
 }
 
+/// 401 のあとの `/auth/user` の結果から、セッションが失効したかを判断する。
+/// 通信エラーなどで確認できなかったときは、失効扱いにしない
+fn is_session_expired(verification: &Result<AuthUserResponse, AuthError>) -> bool {
+    matches!(verification, Ok(AuthUserResponse::Unauthorized | AuthUserResponse::RequiresTwoFactor(_)))
+}
+
 /// 1 セッション (ログイン中) のタスクが共有するもの
 #[derive(Clone)]
 struct Session {
@@ -576,16 +582,30 @@ impl Session {
         }
     }
 
-    fn handle_error(&self, error: &AuthError) {
+    /// API のエラーを処理し、呼び出し元へ返すエラーを返す。
+    /// 401 は一時的に返ることがあるので、`/auth/user` で失効を確かめてからサインアウトさせる。
+    /// 失効していなければセッションを保ち、呼び出し元には (サインアウトを伴わない) 別のエラーを返す
+    async fn handle_error(&self, error: AuthError) -> AuthError {
         if !matches!(error, AuthError::Unauthorized) {
-            return;
+            return error;
         }
-        if self.with_store(|_| ()).is_some() {
-            auth_log::log!("session: unauthorized; notifying session-expired");
-            let _ = self.app.emit(SESSION_EXPIRED_EVENT, ());
-        } else {
+        if self.with_store(|_| ()).is_none() {
             auth_log::log!("session: unauthorized after sign-out; ignored");
+            return error;
         }
+        let verification = self.client.get_current_user().await;
+        if !is_session_expired(&verification) {
+            auth_log::log!("session: unauthorized, but the session could not be confirmed as expired; keeping it");
+            return AuthError::Unexpected("VRChat rejected the request, but the session is still valid. Please try again.".into());
+        }
+        // 確認している間にサインアウトされていたら通知しない
+        if self.with_store(|_| ()).is_none() {
+            auth_log::log!("session: unauthorized after sign-out; ignored");
+            return error;
+        }
+        auth_log::log!("session: unauthorized; notifying session-expired");
+        let _ = self.app.emit(SESSION_EXPIRED_EVENT, ());
+        error
     }
 
     async fn fetch_all_friends(&self, offline: bool) -> Result<Vec<ApiFriend>, AuthError> {
@@ -607,7 +627,9 @@ impl Session {
                 self.with_store(|store| store.replace_friends(online, offline));
                 self.emit_friends();
             }
-            Err(error) => self.handle_error(&error),
+            Err(error) => {
+                self.handle_error(error).await;
+            }
         }
     }
 
@@ -623,7 +645,9 @@ impl Session {
                 self.with_store(|store| store.groups = groups);
                 self.emit_groups();
             }
-            Err(error) => self.handle_error(&error),
+            Err(error) => {
+                self.handle_error(error).await;
+            }
         }
     }
 
@@ -662,10 +686,7 @@ impl Session {
     async fn fetch_group_instances(&self) -> Result<GroupInstanceListView, AuthError> {
         let list = match self.client.get_user_group_instances(&self.user_id).await {
             Ok(list) => list,
-            Err(error) => {
-                self.handle_error(&error);
-                return Err(error);
-            }
+            Err(error) => return Err(self.handle_error(error).await),
         };
         let now_ms = now_epoch_ms();
         let parsed = parse_rfc3339_ms(&list.fetched_at);
@@ -698,10 +719,7 @@ impl Session {
     async fn fetch_instance_detail(&self, location: &str) -> Result<InstanceDetailView, AuthError> {
         let detail: ApiInstanceDetail = match self.client.get_instance(location).await {
             Ok(detail) => detail,
-            Err(error) => {
-                self.handle_error(&error);
-                return Err(error);
-            }
+            Err(error) => return Err(self.handle_error(error).await),
         };
         let (instance_type, host) = instance_type_from_location(location);
         let host_name = match host {
@@ -736,7 +754,7 @@ impl Session {
             }
             Ok(_) => None,
             Err(error) => {
-                self.handle_error(&error);
+                self.handle_error(error).await;
                 None
             }
         }
@@ -778,8 +796,11 @@ impl Session {
                     self.emit_friends();
                 }
                 Err(AuthError::RateLimited) => tokio::time::sleep(RATE_LIMIT_PAUSE).await,
-                Err(error @ AuthError::Unauthorized) => return self.handle_error(&error),
-                Err(_) => {
+                Err(error) => {
+                    // 401 が失効ではなかったときは、他の失敗と同じく後で再試行する
+                    if matches!(self.handle_error(error).await, AuthError::Unauthorized) {
+                        return;
+                    }
                     self.with_store(|store| store.world_retry_at.insert(world_id, Instant::now() + WORLD_RETRY_DELAY));
                 }
             }
@@ -856,10 +877,7 @@ impl SocialState {
         let session = self.session.lock().expect("social session poisoned").clone().ok_or(AuthError::Unauthorized)?;
         let instances = match session.client.get_group_instances(group_id).await {
             Ok(instances) => instances,
-            Err(error) => {
-                session.handle_error(&error);
-                return Err(error);
-            }
+            Err(error) => return Err(session.handle_error(error).await),
         };
         let views = session
             .with_store(|store| store.apply_instances_of_group(group_id, instances, now_epoch_ms()))
@@ -885,6 +903,7 @@ impl SocialState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vrchat_client::CurrentUser;
     use crate::vrchat_models::{ApiGroupInstanceWorld, ApiWorld};
 
     fn api_friend(id: &str, status: &str, location: &str) -> ApiFriend {
@@ -899,6 +918,17 @@ mod tests {
 
     fn view<'a>(views: &'a [FriendView], id: &str) -> &'a FriendView {
         views.iter().find(|v| v.id == id).expect("friend not found")
+    }
+
+    #[test]
+    fn signs_out_only_when_auth_user_confirms_expiry() {
+        let user = CurrentUser { id: "usr_1".into(), display_name: "A".into(), icon_url: None };
+        assert!(is_session_expired(&Ok(AuthUserResponse::Unauthorized)));
+        assert!(is_session_expired(&Ok(AuthUserResponse::RequiresTwoFactor(vec![]))));
+        assert!(!is_session_expired(&Ok(AuthUserResponse::SignedIn(user))));
+        // 確認できなかったときは、誤って失効扱いにしないようサインアウトさせない
+        assert!(!is_session_expired(&Err(AuthError::Network("offline".into()))));
+        assert!(!is_session_expired(&Err(AuthError::RateLimited)));
     }
 
     #[test]
