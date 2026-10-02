@@ -4,7 +4,7 @@ import { REFRESH_COOLDOWN_SEC, type GroupInstancesState, type SortKey } from "..
 import { useNow } from "../hooks/useNow";
 import { formatClock, formatElapsed } from "../lib/format";
 import type { Group, GroupAccessType, GroupInstance, LastJoinedAt } from "../lib/social";
-import { ChevronDownIcon, GroupsIcon, VisibilityListIcon } from "./icons";
+import { ChevronDownIcon, GroupsIcon, MapPinIcon, VisibilityListIcon } from "./icons";
 import { OpenInstanceButton } from "./OpenInstanceButton";
 import { OverlayScrollArea } from "./OverlayScrollArea";
 
@@ -147,6 +147,7 @@ export function GroupsPanel({
                                 <span className="instance-access-type">{ACCESS_TYPE_LABELS[instance.accessType]}</span>
                                 {elapsed !== null && (
                                   <span className="instance-last-joined" title="Time since you last joined">
+                                    <MapPinIcon size={14} />
                                     {elapsed}
                                   </span>
                                 )}
