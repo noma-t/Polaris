@@ -70,7 +70,7 @@ export default function App() {
     simulate: (appSettings?.developerMode && appSettings.simulateUpdateAvailable) ?? false,
     onSimulatedInstallFinished: () => showToast("Simulated update finished. Nothing was installed."),
   });
-  const { friends, groups, updatedAt } = useSocial({
+  const { friends, groups, lastJoinedAt, updatedAt } = useSocial({
     isSignedIn: currentUser !== null,
     pinnedFriendIds,
     onSessionExpired: () => {
@@ -205,6 +205,7 @@ export default function App() {
                       friends={displayedFriends}
                       groups={groups}
                       groupState={groupState}
+                      lastJoinedAt={lastJoinedAt}
                       pinnedFriendIds={displayedPinnedFriendIds}
                       shownGroupIds={shownGroupIds}
                       collapsedGroupIds={collapsedGroupIds}

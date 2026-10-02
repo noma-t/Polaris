@@ -1124,11 +1124,22 @@ a:hover {
   font-size: 13px;
   color: var(--color-text-muted);
 }
+.instance-secondary-left {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
 .instance-access-type {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.instance-last-joined {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 13px;
 }
 .instance-created {
   flex: none;

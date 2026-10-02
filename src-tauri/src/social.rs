@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 
 use crate::auth_log;
 use crate::background;
-use crate::instance_store;
+use crate::instance_store::{self, StoredInstances};
 use crate::pipeline::{self, PipelineEvent};
 use crate::vrchat_client::{AuthError, AuthUserResponse, VrchatClient, FRIENDS_PAGE_SIZE};
 use crate::vrchat_models::{ApiFriend, ApiGroupInstance, ApiInstance, ApiInstanceDetail};
@@ -21,6 +21,7 @@ use crate::vrchat_models::{ApiFriend, ApiGroupInstance, ApiInstance, ApiInstance
 pub const FRIENDS_UPDATED_EVENT: &str = "social://friends-updated";
 pub const GROUPS_UPDATED_EVENT: &str = "social://groups-updated";
 pub const SESSION_EXPIRED_EVENT: &str = "social://session-expired";
+pub const LAST_JOINED_UPDATED_EVENT: &str = "social://last-joined-updated";
 
 /// World 名の取得は 1 秒に 1 件まで
 const WORLD_FETCH_INTERVAL: Duration = Duration::from_secs(1);
@@ -32,6 +33,8 @@ const RATE_LIMIT_PAUSE: Duration = Duration::from_secs(60);
 const GROUP_INSTANCES_REFRESH_INTERVAL: Duration = Duration::from_secs(120);
 /// 端末と VRChat の時計のずれで fetchedAt + 間隔 が過ぎていても、連続取得しないよう最低限空ける時間
 const GROUP_INSTANCES_MIN_REFRESH_DELAY: Duration = Duration::from_secs(10);
+/// 自分が最後にインスタンスに入った時刻を残す期間。経過がこれ以上になった記録は破棄する (表示は最大 23h59m)
+const LAST_JOINED_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -342,9 +345,27 @@ struct SocialStore {
     instance_seen: HashMap<String, SeenInstance>,
     /// 次に初めて見るグループインスタンスに振る Created ソート用の値
     next_created_order: u32,
+    /// グループインスタンスの location → 自分が最後に入った時刻 (epoch ms)
+    last_joined: HashMap<String, i64>,
 }
 
 impl SocialStore {
+    /// 自分がインスタンスに入ったことを記録する。グループインスタンス以外は記録せず、記録したときだけ true
+    fn record_joined(&mut self, location: &str, now_ms: i64) -> bool {
+        if location_param(location, "group").is_none() {
+            return false;
+        }
+        self.last_joined.insert(location.to_owned(), now_ms);
+        self.prune_last_joined(now_ms);
+        true
+    }
+
+    /// 入ってから 24 時間以上経った記録を破棄する
+    fn prune_last_joined(&mut self, now_ms: i64) {
+        self.last_joined.retain(|_, joined_at| now_ms - *joined_at < LAST_JOINED_TTL_MS);
+    }
+
+
     fn friend_views(&self) -> Vec<FriendView> {
         self.friends
             .values()
@@ -541,7 +562,8 @@ impl SocialStore {
                 self.friends.remove(user_id);
                 self.pinned.remove(user_id);
             }
-            PipelineEvent::Connected | PipelineEvent::GroupsChanged => return false,
+            // 入室の記録は Friends の snapshot に関係しないので、Session 側で処理する
+            PipelineEvent::Connected | PipelineEvent::GroupsChanged | PipelineEvent::UserLocation { .. } => return false,
         }
         true
     }
@@ -579,6 +601,12 @@ impl Session {
     fn emit_groups(&self) {
         if let Some(groups) = self.with_store(|store| store.groups.clone()) {
             let _ = self.app.emit(GROUPS_UPDATED_EVENT, groups);
+        }
+    }
+
+    fn emit_last_joined(&self) {
+        if let Some(last_joined) = self.with_store(|store| store.last_joined.clone()) {
+            let _ = self.app.emit(LAST_JOINED_UPDATED_EVENT, last_joined);
         }
     }
 
@@ -673,6 +701,12 @@ impl Session {
                     has_connected = true;
                 }
                 PipelineEvent::GroupsChanged => self.sync_groups().await,
+                PipelineEvent::UserLocation { location } => {
+                    if self.with_store(|store| store.record_joined(location, now_epoch_ms())) == Some(true) {
+                        self.emit_last_joined();
+                        self.persist_instance_seen();
+                    }
+                }
                 _ => {
                     if self.with_store(|store| store.apply(&event)) == Some(true) {
                         self.emit_friends();
@@ -710,8 +744,13 @@ impl Session {
 
     /// 観測済みのグループインスタンスの記録を保存する。ファイル書き込みは store のロック外で行う
     fn persist_instance_seen(&self) {
-        if let Some((seen, next_created_order)) = self.with_store(|store| (store.instance_seen.clone(), store.next_created_order)) {
-            instance_store::save(&self.app, &self.user_id, seen, next_created_order);
+        let stored = self.with_store(|store| StoredInstances {
+            seen: store.instance_seen.clone(),
+            next_created_order: store.next_created_order,
+            last_joined: store.last_joined.clone(),
+        });
+        if let Some(stored) = stored {
+            instance_store::save(&self.app, &self.user_id, stored);
         }
     }
 
@@ -824,11 +863,13 @@ impl SocialState {
     /// 初期同期・pipeline・World 名取得・バックグラウンド中の定期取得のタスクを起動する
     pub fn start(&self, app: AppHandle, client: VrchatClient, user_id: String) {
         self.stop();
-        let (instance_seen, next_created_order) = instance_store::load(&app, &user_id);
+        let stored = instance_store::load(&app, &user_id);
         let generation = {
             let mut store = self.store.lock().expect("social store poisoned");
-            store.instance_seen = instance_seen;
-            store.next_created_order = next_created_order;
+            store.instance_seen = stored.seen;
+            store.next_created_order = stored.next_created_order;
+            store.last_joined = stored.last_joined;
+            store.prune_last_joined(now_epoch_ms());
             store.generation
         };
         let session = Session { app, client, user_id, store: self.store.clone(), generation };
@@ -864,6 +905,13 @@ impl SocialState {
 
     pub fn group_views(&self) -> Vec<GroupView> {
         self.store.lock().expect("social store poisoned").groups.clone()
+    }
+
+    /// 自分が最後にグループインスタンスに入った時刻 (location → epoch ms)。24 時間以上前の記録は返さない
+    pub fn last_joined_views(&self) -> HashMap<String, i64> {
+        let mut store = self.store.lock().expect("social store poisoned");
+        store.prune_last_joined(now_epoch_ms());
+        store.last_joined.clone()
     }
 
     /// 所属する全グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
@@ -1187,5 +1235,45 @@ mod tests {
         store.world_retry_at.insert("wrld_z".into(), now + WORLD_RETRY_DELAY);
         assert_eq!(store.next_world_to_fetch(now), None);
         assert_eq!(store.next_world_to_fetch(now + WORLD_RETRY_DELAY).as_deref(), Some("wrld_z"));
+    }
+
+    #[test]
+    fn records_last_joined_only_for_group_instances() {
+        let mut store = SocialStore::default();
+        assert!(store.record_joined("wrld_a:1~group(grp_1)~groupAccessType(plus)", 1_000));
+        assert!(!store.record_joined("wrld_a:2", 1_000));
+        assert!(!store.record_joined("wrld_a:3~private(usr_1)", 1_000));
+        assert_eq!(store.last_joined.len(), 1);
+    }
+
+    #[test]
+    fn overwrites_last_joined_when_entering_the_same_instance_again() {
+        let mut store = SocialStore::default();
+        store.record_joined("wrld_a:1~group(grp_1)", 1_000);
+        store.record_joined("wrld_a:1~group(grp_1)", 5_000);
+        assert_eq!(store.last_joined["wrld_a:1~group(grp_1)"], 5_000);
+    }
+
+    #[test]
+    fn drops_last_joined_after_24_hours() {
+        let mut store = SocialStore::default();
+        store.last_joined.insert("wrld_a:1~group(grp_1)".into(), 0);
+        store.last_joined.insert("wrld_b:2~group(grp_1)".into(), 1);
+
+        // 23h59m59.999s では残り、24h ちょうどで消える
+        store.prune_last_joined(LAST_JOINED_TTL_MS - 1);
+        assert_eq!(store.last_joined.len(), 2);
+        store.prune_last_joined(LAST_JOINED_TTL_MS);
+        assert_eq!(store.last_joined.len(), 1);
+        assert!(store.last_joined.contains_key("wrld_b:2~group(grp_1)"));
+    }
+
+    #[test]
+    fn prunes_expired_records_when_recording_a_new_join() {
+        let mut store = SocialStore::default();
+        store.last_joined.insert("wrld_old:1~group(grp_1)".into(), 0);
+        store.record_joined("wrld_new:1~group(grp_1)", LAST_JOINED_TTL_MS + 10);
+        assert!(!store.last_joined.contains_key("wrld_old:1~group(grp_1)"));
+        assert!(store.last_joined.contains_key("wrld_new:1~group(grp_1)"));
     }
 }

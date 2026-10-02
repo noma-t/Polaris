@@ -2,8 +2,8 @@ import { useRef, type CSSProperties } from "react";
 import { useElementHeight } from "../hooks/useElementHeight";
 import { REFRESH_COOLDOWN_SEC, type GroupInstancesState, type SortKey } from "../hooks/useGroupInstances";
 import { useNow } from "../hooks/useNow";
-import { formatClock } from "../lib/format";
-import type { Group, GroupAccessType, GroupInstance } from "../lib/social";
+import { formatClock, formatElapsed } from "../lib/format";
+import type { Group, GroupAccessType, GroupInstance, LastJoinedAt } from "../lib/social";
 import { ChevronDownIcon, GroupsIcon, VisibilityListIcon } from "./icons";
 import { OpenInstanceButton } from "./OpenInstanceButton";
 import { OverlayScrollArea } from "./OverlayScrollArea";
@@ -11,6 +11,8 @@ import { OverlayScrollArea } from "./OverlayScrollArea";
 interface GroupsPanelProps {
   groups: Group[];
   groupState: GroupInstancesState;
+  /** グループインスタンスの location → 自分が最後に入った時刻 (epoch ms) */
+  lastJoinedAt: LastJoinedAt;
   shownGroupIds: Record<string, boolean>;
   collapsedGroupIds: Record<string, boolean>;
   onToggleCollapsed: (groupId: string) => void;
@@ -34,6 +36,7 @@ const ACCESS_TYPE_LABELS: Record<GroupAccessType, string> = {
 export function GroupsPanel({
   groups,
   groupState,
+  lastJoinedAt,
   shownGroupIds,
   collapsedGroupIds,
   onToggleCollapsed,
@@ -46,6 +49,8 @@ export function GroupsPanel({
   const now = useNow(100, isCoolingCandidate);
   const cooldownMs = Math.min(REFRESH_COOLDOWN_SEC * 1000, Math.max(0, cooldownUntil - now));
   const isCooling = cooldownMs > 0;
+  // 分単位で表示する経過時間の再描画用
+  const elapsedNow = useNow(30_000);
   const shownGroups = groups.filter((g) => shownGroupIds[g.id]);
   const headerRef = useRef<HTMLDivElement>(null);
   // 1 カラム時は panel-header も sticky なので、group-card-header はその直下に貼り付ける
@@ -125,28 +130,39 @@ export function GroupsPanel({
                       <div className="group-list-message">{hasLoadFailed && !isLoading ? "Failed to load instances" : "Loading…"}</div>
                     )}
                     {instancesByGroup && count === 0 && <div className="group-list-message">No instances</div>}
-                    {rows.map((instance) => (
-                      <div key={instance.id} className="instance-row">
-                        <div className="instance-info">
-                          <div className="instance-primary">
-                            <span className="instance-world">{instance.worldName}</span>
-                            <span className={`instance-user-count ${instance.userCount >= instance.capacity ? "is-full" : ""}`}>
-                              ({instance.userCount}/{instance.capacity})
-                            </span>
+                    {rows.map((instance) => {
+                      const joinedAt = lastJoinedAt[instance.id];
+                      const elapsed = joinedAt === undefined ? null : formatElapsed(joinedAt, elapsedNow);
+                      return (
+                        <div key={instance.id} className="instance-row">
+                          <div className="instance-info">
+                            <div className="instance-primary">
+                              <span className="instance-world">{instance.worldName}</span>
+                              <span className={`instance-user-count ${instance.userCount >= instance.capacity ? "is-full" : ""}`}>
+                                ({instance.userCount}/{instance.capacity})
+                              </span>
+                            </div>
+                            <div className="instance-secondary">
+                              <div className="instance-secondary-left">
+                                <span className="instance-access-type">{ACCESS_TYPE_LABELS[instance.accessType]}</span>
+                                {elapsed !== null && (
+                                  <span className="instance-last-joined" title="Time since you last joined">
+                                    {elapsed}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="instance-created" title="First seen by Polaris">
+                                {formatClock(instance.firstSeenAt)}
+                              </span>
+                            </div>
                           </div>
-                          <div className="instance-secondary">
-                            <span className="instance-access-type">{ACCESS_TYPE_LABELS[instance.accessType]}</span>
-                            <span className="instance-created" title="First seen by Polaris">
-                              {formatClock(instance.firstSeenAt)}
-                            </span>
-                          </div>
+                          <OpenInstanceButton
+                            disabledReason={openDisabledReason}
+                            onClick={() => onOpenInstance(instance.id, instance.worldName)}
+                          />
                         </div>
-                        <OpenInstanceButton
-                          disabledReason={openDisabledReason}
-                          onClick={() => onOpenInstance(instance.id, instance.worldName)}
-                        />
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
