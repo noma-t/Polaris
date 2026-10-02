@@ -330,6 +330,15 @@ fn group_instances_refresh_delay(fetched_at_ms: i64, now_ms: i64) -> Duration {
     Duration::from_millis((fetched_at_ms + interval_ms - now_ms).clamp(min_ms, interval_ms) as u64)
 }
 
+/// フロントエンドから呼ばれた取得コマンドの結果と所要時間を記録する
+fn log_command_result(name: &str, started_at: Instant, result: Result<usize, &AuthError>) {
+    let elapsed_ms = started_at.elapsed().as_millis();
+    match result {
+        Ok(count) => auth_log::log!("command: {name} -> ok, {count} items ({elapsed_ms} ms)"),
+        Err(error) => auth_log::log!("command: {name} -> failed: {error} ({elapsed_ms} ms)"),
+    }
+}
+
 #[derive(Default)]
 struct SocialStore {
     /// start / stop のたびに進める。古いセッションのタスクによる書き込みを捨てるために使う
@@ -652,10 +661,12 @@ impl Session {
         let result = async { Ok::<_, AuthError>((self.fetch_all_friends(false).await?, self.fetch_all_friends(true).await?)) }.await;
         match result {
             Ok((online, offline)) => {
+                auth_log::log!("sync: friends online={} offline={}", online.len(), offline.len());
                 self.with_store(|store| store.replace_friends(online, offline));
                 self.emit_friends();
             }
             Err(error) => {
+                auth_log::log!("sync: friends failed: {error}");
                 self.handle_error(error).await;
             }
         }
@@ -670,10 +681,12 @@ impl Session {
                     .map(|g| GroupView { id: g.group_id, name: g.name })
                     .collect();
                 groups.sort_by(|a, b| a.name.cmp(&b.name));
+                auth_log::log!("sync: groups count={}", groups.len());
                 self.with_store(|store| store.groups = groups);
                 self.emit_groups();
             }
             Err(error) => {
+                auth_log::log!("sync: groups failed: {error}");
                 self.handle_error(error).await;
             }
         }
@@ -695,14 +708,20 @@ impl Session {
                 // 初回は start 時の同期で足りる。再接続時は切断中の変化を取り戻すため再同期する
                 PipelineEvent::Connected => {
                     if has_connected {
+                        auth_log::log!("pipeline: reconnected; resyncing friends and groups");
                         self.sync_friends().await;
                         self.sync_groups().await;
                     }
                     has_connected = true;
                 }
-                PipelineEvent::GroupsChanged => self.sync_groups().await,
+                PipelineEvent::GroupsChanged => {
+                    auth_log::log!("pipeline: groups changed; resyncing groups");
+                    self.sync_groups().await;
+                }
                 PipelineEvent::UserLocation { location } => {
-                    if self.with_store(|store| store.record_joined(location, now_epoch_ms())) == Some(true) {
+                    let is_recorded = self.with_store(|store| store.record_joined(location, now_epoch_ms())) == Some(true);
+                    auth_log::log!("pipeline: own location changed to {location}; recorded as a group instance join={is_recorded}");
+                    if is_recorded {
                         self.emit_last_joined();
                         self.persist_instance_seen();
                     }
@@ -726,18 +745,25 @@ impl Session {
         let parsed = parse_rfc3339_ms(&list.fetched_at);
         let fetched_at = parsed.unwrap_or(now_ms);
         let next_in = group_instances_refresh_delay(fetched_at, now_ms).as_secs_f64();
-        match parsed {
-            Some(ms) => eprintln!(
+        let message = match parsed {
+            Some(ms) => format!(
                 "[group-instances] fetchedAt={} (raw={:?}, age={:.1}s, next in {next_in:.1}s)",
                 format_local_time(ms),
                 list.fetched_at,
                 (now_ms - ms) as f64 / 1000.0,
             ),
-            None => eprintln!("[group-instances] fetchedAt={:?} (unparsed; using local time, next in {next_in:.1}s)", list.fetched_at),
-        }
-        let view = self
+            None => format!("[group-instances] fetchedAt={:?} (unparsed; using local time, next in {next_in:.1}s)", list.fetched_at),
+        };
+        eprintln!("{message}");
+        auth_log::log!("{message}");
+        let received = list.instances.len();
+        let Some(view) = self
             .with_store(|store| GroupInstanceListView { fetched_at, instances: store.apply_group_instances(list.instances, now_ms) })
-            .ok_or(AuthError::Unauthorized)?;
+        else {
+            auth_log::log!("group instances: result discarded (signed out while fetching)");
+            return Err(AuthError::Unauthorized);
+        };
+        auth_log::log!("group instances: applied {} of {received} received instances", view.instances.len());
         self.persist_instance_seen();
         Ok(view)
     }
@@ -803,20 +829,52 @@ impl Session {
     /// 次の取得は fetchedAt + 取得間隔 に行い、取得できなかったときは取得間隔だけ待つ
     async fn run_background_group_poll(self) {
         let mut delay = GROUP_INSTANCES_REFRESH_INTERVAL;
-        loop {
+        for cycle in 1_u64.. {
+            let slept_from = Instant::now();
+            let wall_from = now_epoch_ms();
+            auth_log::log!("background poll #{cycle}: sleeping {:.1}s", delay.as_secs_f64());
             tokio::time::sleep(delay).await;
-            if !background::should_poll_in_background(&self.app) {
+            // 単調時計と壁時計の進みが大きく違うときは、スリープからの復帰や時計の変更を疑えるよう記録する
+            let slept = slept_from.elapsed();
+            let wall_elapsed_ms = now_epoch_ms() - wall_from;
+            let clock_skew_ms = wall_elapsed_ms - slept.as_millis() as i64;
+            let skew_note = if clock_skew_ms.abs() > 5_000 {
+                format!(" (wall clock advanced {:+.1}s vs monotonic: system sleep or clock change?)", clock_skew_ms as f64 / 1000.0)
+            } else {
+                String::new()
+            };
+            let conditions = background::poll_conditions(&self.app);
+            let should_poll = conditions.should_poll();
+            auth_log::log!(
+                "background poll #{cycle}: woke after {:.1}s{skew_note}; {conditions:?} -> {}",
+                slept.as_secs_f64(),
+                if should_poll { "fetch" } else { "skip (window is visible, or run in background is off)" }
+            );
+            if !should_poll {
                 delay = GROUP_INSTANCES_REFRESH_INTERVAL;
                 continue;
             }
-            delay = match self.fetch_group_instances().await {
-                Ok(list) => group_instances_refresh_delay(list.fetched_at, now_epoch_ms()),
-                Err(AuthError::RateLimited) => RATE_LIMIT_PAUSE + GROUP_INSTANCES_REFRESH_INTERVAL,
+            let fetch_started = Instant::now();
+            let result = self.fetch_group_instances().await;
+            let fetch_ms = fetch_started.elapsed().as_millis();
+            delay = match result {
+                Ok(list) => {
+                    let next = group_instances_refresh_delay(list.fetched_at, now_epoch_ms());
+                    auth_log::log!("background poll #{cycle}: fetched {} instances in {fetch_ms} ms", list.instances.len());
+                    next
+                }
+                Err(AuthError::RateLimited) => {
+                    auth_log::log!("background poll #{cycle}: rate limited after {fetch_ms} ms; pausing");
+                    RATE_LIMIT_PAUSE + GROUP_INSTANCES_REFRESH_INTERVAL
+                }
                 Err(AuthError::Unauthorized) => {
-                    auth_log::log!("background poll: stopped (unauthorized)");
+                    auth_log::log!("background poll #{cycle}: stopped (unauthorized) after {fetch_ms} ms");
                     return;
                 }
-                Err(_) => GROUP_INSTANCES_REFRESH_INTERVAL,
+                Err(error) => {
+                    auth_log::log!("background poll #{cycle}: failed after {fetch_ms} ms: {error}; retrying later");
+                    GROUP_INSTANCES_REFRESH_INTERVAL
+                }
             };
         }
     }
@@ -834,10 +892,15 @@ impl Session {
                     self.with_store(|store| store.world_names.insert(world_id, world.name));
                     self.emit_friends();
                 }
-                Err(AuthError::RateLimited) => tokio::time::sleep(RATE_LIMIT_PAUSE).await,
+                Err(AuthError::RateLimited) => {
+                    auth_log::log!("world queue: rate limited; pausing {}s", RATE_LIMIT_PAUSE.as_secs());
+                    tokio::time::sleep(RATE_LIMIT_PAUSE).await;
+                }
                 Err(error) => {
+                    auth_log::log!("world queue: failed to fetch {world_id}: {error}");
                     // 401 が失効ではなかったときは、他の失敗と同じく後で再試行する
                     if matches!(self.handle_error(error).await, AuthError::Unauthorized) {
+                        auth_log::log!("world queue: stopped (unauthorized)");
                         return;
                     }
                     self.with_store(|store| store.world_retry_at.insert(world_id, Instant::now() + WORLD_RETRY_DELAY));
@@ -874,15 +937,16 @@ impl SocialState {
         };
         let session = Session { app, client, user_id, store: self.store.clone(), generation };
 
+        auth_log::log!("social: started user={} generation={generation}", session.user_id);
         let initial_sync = session.clone();
         let tasks = vec![
-            tauri::async_runtime::spawn(async move {
+            auth_log::spawn_logged("initial sync", async move {
                 initial_sync.sync_friends().await;
                 initial_sync.sync_groups().await;
             }),
-            tauri::async_runtime::spawn(session.clone().run_pipeline()),
-            tauri::async_runtime::spawn(session.clone().run_world_queue()),
-            tauri::async_runtime::spawn(session.clone().run_background_group_poll()),
+            auth_log::spawn_logged("pipeline", session.clone().run_pipeline()),
+            auth_log::spawn_logged("world queue", session.clone().run_world_queue()),
+            auth_log::spawn_logged("background group poll", session.clone().run_background_group_poll()),
         ];
         *self.tasks.lock().expect("social tasks poisoned") = tasks;
         *self.session.lock().expect("social session poisoned") = Some(session);
@@ -890,9 +954,14 @@ impl SocialState {
 
     /// ログアウト時に呼ぶ。全タスクを止めて状態を破棄する
     pub fn stop(&self) {
-        for task in self.tasks.lock().expect("social tasks poisoned").drain(..) {
+        let mut tasks = self.tasks.lock().expect("social tasks poisoned");
+        if !tasks.is_empty() {
+            auth_log::log!("social: stopping {} tasks", tasks.len());
+        }
+        for task in tasks.drain(..) {
             task.abort();
         }
+        drop(tasks);
         *self.session.lock().expect("social session poisoned") = None;
         let mut store = self.store.lock().expect("social store poisoned");
         let generation = store.generation + 1;
@@ -916,28 +985,53 @@ impl SocialState {
 
     /// 所属する全グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
     pub async fn fetch_group_instances(&self) -> Result<GroupInstanceListView, AuthError> {
-        let session = self.session.lock().expect("social session poisoned").clone().ok_or(AuthError::Unauthorized)?;
-        session.fetch_group_instances().await
+        let Some(session) = self.session.lock().expect("social session poisoned").clone() else {
+            auth_log::log!("command: fetch group instances -> no session");
+            return Err(AuthError::Unauthorized);
+        };
+        auth_log::log!("command: fetch group instances (from the UI)");
+        let started_at = Instant::now();
+        let result = session.fetch_group_instances().await;
+        log_command_result("fetch group instances", started_at, result.as_ref().map(|list| list.instances.len()));
+        result
     }
 
     /// 指定した 1 グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
     pub async fn fetch_instances_of_group(&self, group_id: &str) -> Result<Vec<GroupInstanceView>, AuthError> {
-        let session = self.session.lock().expect("social session poisoned").clone().ok_or(AuthError::Unauthorized)?;
-        let instances = match session.client.get_group_instances(group_id).await {
-            Ok(instances) => instances,
-            Err(error) => return Err(session.handle_error(error).await),
+        let name = format!("fetch instances of {group_id}");
+        let Some(session) = self.session.lock().expect("social session poisoned").clone() else {
+            auth_log::log!("command: {name} -> no session");
+            return Err(AuthError::Unauthorized);
         };
-        let views = session
-            .with_store(|store| store.apply_instances_of_group(group_id, instances, now_epoch_ms()))
-            .ok_or(AuthError::Unauthorized)?;
-        session.persist_instance_seen();
-        Ok(views)
+        auth_log::log!("command: {name} (manual refresh from the UI)");
+        let started_at = Instant::now();
+        let result = async {
+            let instances = match session.client.get_group_instances(group_id).await {
+                Ok(instances) => instances,
+                Err(error) => return Err(session.handle_error(error).await),
+            };
+            let views = session
+                .with_store(|store| store.apply_instances_of_group(group_id, instances, now_epoch_ms()))
+                .ok_or(AuthError::Unauthorized)?;
+            session.persist_instance_seen();
+            Ok(views)
+        }
+        .await;
+        log_command_result(&name, started_at, result.as_ref().map(Vec::len));
+        result
     }
 
     /// フレンドがいるインスタンスの詳細を取得する
     pub async fn fetch_instance_detail(&self, location: &str) -> Result<InstanceDetailView, AuthError> {
-        let session = self.session.lock().expect("social session poisoned").clone().ok_or(AuthError::Unauthorized)?;
-        session.fetch_instance_detail(location).await
+        let name = format!("fetch instance detail {location}");
+        let Some(session) = self.session.lock().expect("social session poisoned").clone() else {
+            auth_log::log!("command: {name} -> no session");
+            return Err(AuthError::Unauthorized);
+        };
+        let started_at = Instant::now();
+        let result = session.fetch_instance_detail(location).await;
+        log_command_result(&name, started_at, result.as_ref().map(|_| 1));
+        result
     }
 
     /// pinned を置き換え、`is_world_loading` が変わるので snapshot を返す

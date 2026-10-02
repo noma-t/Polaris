@@ -1,8 +1,9 @@
 //! VRChat API クライアント (認証まわり)。
 //! auth cookie は Rust 側の cookie jar にのみ保持し、WebView には渡さない。
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use reqwest::{
@@ -22,6 +23,11 @@ use crate::vrchat_models::{
 const API_BASE: &str = "https://api.vrchat.cloud/api/1";
 /// VRChat API は識別可能な User-Agent を必須としている
 pub const USER_AGENT: &str = concat!("Polaris/", env!("CARGO_PKG_VERSION"), " noma-t");
+
+/// リクエストの応答が返らない間、この間隔でログに残す
+const SLOW_REQUEST_NOTICE_INTERVAL: Duration = Duration::from_secs(30);
+/// ログ上で開始と完了を対応づけるためのリクエスト番号
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 /// `GET /auth/user/friends` の 1 ページあたりの最大件数
 pub const FRIENDS_PAGE_SIZE: usize = 100;
@@ -350,8 +356,20 @@ impl VrchatClient {
             Some(query) => format!("{}?{query}", request.url().path()),
             None => request.url().path().to_owned(),
         };
+        // 応答が返らないまま止まったリクエストが、完了時にしか記録されない結果として見えなくならないよう、開始も記録する
+        let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        auth_log::log!("{method} {path} -> sent [#{request_id}]");
         let started_at = Instant::now();
-        let result = self.http.execute(request).await;
+        let mut pending = Box::pin(self.http.execute(request));
+        let result = loop {
+            match tokio::time::timeout(SLOW_REQUEST_NOTICE_INTERVAL, &mut pending).await {
+                Ok(result) => break result,
+                Err(_) => auth_log::log!(
+                    "{method} {path} -> still waiting for a response after {} s [#{request_id}]",
+                    started_at.elapsed().as_secs()
+                ),
+            }
+        };
         let elapsed_ms = started_at.elapsed().as_millis();
         match &result {
             Ok(response) => {
@@ -369,18 +387,18 @@ impl VrchatClient {
                 };
                 if response.status() == StatusCode::UNAUTHORIZED {
                     auth_log::log!(
-                        "{method} {path} -> {} ({elapsed_ms} ms) cookies=[{}]{set_cookie_note}",
+                        "{method} {path} -> {} ({elapsed_ms} ms) cookies=[{}]{set_cookie_note} [#{request_id}]",
                         response.status(),
                         self.cookie_names().join(", ")
                     );
                 } else {
-                    auth_log::log!("{method} {path} -> {} ({elapsed_ms} ms){set_cookie_note}", response.status());
+                    auth_log::log!("{method} {path} -> {} ({elapsed_ms} ms){set_cookie_note} [#{request_id}]", response.status());
                 }
                 if !set_cookies.is_empty() {
                     self.sync_saved_session();
                 }
             }
-            Err(err) => auth_log::log!("{method} {path} -> network error ({elapsed_ms} ms): {err}"),
+            Err(err) => auth_log::log!("{method} {path} -> network error ({elapsed_ms} ms): {err} [#{request_id}]"),
         }
         Ok(result?)
     }

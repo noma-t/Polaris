@@ -10,6 +10,7 @@ use serde::Serialize;
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 use tauri::{AppHandle, Emitter, State};
 
+use crate::auth_log;
 use crate::vrchat_client::AuthError;
 
 const GAME_PROCESS_NAME: &str = "VRChat.exe";
@@ -44,7 +45,7 @@ impl GameState {
     pub fn start_monitor(&self, app: AppHandle, launcher_path: String) {
         self.inner.lock().expect("game state poisoned").launcher_path = launcher_path;
         let state = self.clone();
-        tauri::async_runtime::spawn(async move {
+        auth_log::spawn_logged("game monitor", async move {
             let mut system = System::new();
             loop {
                 let is_running = is_game_running(&mut system);
@@ -75,6 +76,7 @@ impl GameState {
             (inner.status != prev).then_some(inner.status)
         };
         if let Some(status) = next {
+            auth_log::log!("game: status changed running={} launcherFound={}", status.is_running, status.is_launcher_found);
             let _ = app.emit(STATUS_CHANGED_EVENT, status);
         }
     }
@@ -108,7 +110,16 @@ pub fn game_get_status(state: State<'_, GameState>) -> GameStatus {
 /// launch.exe に `vrchat://launch` URL を渡し、起動中の VRChat でインスタンスを開く
 #[tauri::command]
 pub fn game_open_instance(state: State<'_, GameState>, location: String) -> Result<(), AuthError> {
-    if !is_valid_instance_location(&location) {
+    let result = open_instance(&state, &location);
+    match &result {
+        Ok(()) => auth_log::log!("game: open instance {location} -> launched"),
+        Err(err) => auth_log::log!("game: open instance {location} -> failed: {err}"),
+    }
+    result
+}
+
+fn open_instance(state: &GameState, location: &str) -> Result<(), AuthError> {
+    if !is_valid_instance_location(location) {
         return Err(AuthError::Unexpected(format!("Invalid instance location: {location}")));
     }
     let (is_running, launcher_path) = {

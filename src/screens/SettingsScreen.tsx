@@ -78,7 +78,7 @@ export function SettingsScreen({ version, appSettings, onUpdateAppSettings, upda
           />
           <ToggleSettingRow
             title="Auth logging"
-            description="VRChat API へのリクエストと、ログイン・セッション復元・サインアウトなど認証まわりの出来事をログファイルに記録します。cookie やパスワードの値は記録しません。"
+            description="VRChat API へのリクエストと、認証・バックグラウンド取得・自動更新・ウィンドウ状態などの出来事をログファイルに詳しく記録します。cookie やパスワードの値は記録しません。"
             isOn={appSettings.authLogging}
             onToggle={(authLogging) => void saveAppSettings({ authLogging }, "Failed to save Auth logging")}
           />

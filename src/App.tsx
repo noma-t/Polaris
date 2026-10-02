@@ -20,7 +20,9 @@ import { useUserSettings } from "./hooks/useUserSettings";
 import { useToast } from "./hooks/useToast";
 import { useUiState } from "./hooks/useUiState";
 import { useUpdater } from "./hooks/useUpdater";
+import { useWindowDiagnostics } from "./hooks/useWindowDiagnostics";
 import { logout, restoreSession, type CurrentUser, type SignOutReason } from "./lib/auth";
+import { diagnosticLog } from "./lib/diagnosticLog";
 import { formatClock } from "./lib/format";
 import { openInstanceDisabledReason, openInstanceInGame } from "./lib/game";
 import { AboutScreen } from "./screens/AboutScreen";
@@ -94,6 +96,11 @@ export default function App() {
   const onToggleDisplayedFriend = isThumbnailMode ? toggleThumbnailPinnedFriend : togglePinnedFriend;
   const changeSort = useCallback((sort: SortState) => updateUiState({ sort }), [updateUiState]);
   const hasOpenGroup = screen === "instances" && groups.some((g) => shownGroupIds[g.id] && !collapsedGroupIds[g.id]);
+  useWindowDiagnostics();
+  // 自動更新の有無は screen と展開状態で決まるので、変化を残す (Instances 以外の画面にいる間は自動更新が止まる)
+  useEffect(() => {
+    diagnosticLog(`ui: screen=${screen} hasOpenGroup=${hasOpenGroup} groups=${groups.length}`);
+  }, [screen, hasOpenGroup, groups.length]);
   const groupState = useGroupInstances({
     isSignedIn: currentUser !== null,
     hasOpenGroup,

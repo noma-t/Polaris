@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
+use crate::auth_log;
 use crate::settings_store::write_json;
 use crate::social::SeenInstance;
 
@@ -76,6 +77,7 @@ pub fn load(app: &AppHandle, user_id: &str) -> StoredInstances {
 pub fn save(app: &AppHandle, user_id: &str, stored: StoredInstances) {
     let _guard = FILE_LOCK.lock().expect("instances lock poisoned");
     let Some(path) = instances_path(app) else {
+        auth_log::log!("instance store: could not resolve the app data directory");
         return eprintln!("[instance-store] could not resolve the app data directory");
     };
     let mut file = read_file(&path);
@@ -84,6 +86,7 @@ pub fn save(app: &AppHandle, user_id: &str, stored: StoredInstances) {
         UserInstances { seen: stored.seen, next_created_order: stored.next_created_order, last_joined: stored.last_joined },
     );
     if let Err(err) = write_json(&path, &file) {
+        auth_log::log!("instance store: failed to save: {err}");
         eprintln!("[instance-store] failed to save: {err}");
     }
 }

@@ -198,6 +198,14 @@ pub fn settings_save_app(
     let launcher_path = settings.launcher_path.clone();
     let run_in_background = settings.run_in_background;
     let is_auth_logging_enabled = settings.is_auth_logging_enabled();
+    // launcher_path は記録しない (ユーザー名を含みうる)
+    auth_log::log!(
+        "settings: saved runInBackground={} launchAtStartup={} developerMode={} authLogging={}",
+        settings.run_in_background,
+        settings.launch_at_startup,
+        settings.developer_mode,
+        settings.auth_logging
+    );
     file.app = settings;
     write_file(&path, &file)?;
     game.set_launcher_path(&app, launcher_path);
