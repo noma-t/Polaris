@@ -22,6 +22,8 @@ interface InstancesScreenProps {
   groupState: GroupInstancesState;
   /** グループインスタンスの location → 自分が最後に入った時刻 (epoch ms) */
   lastJoinedAt: LastJoinedAt;
+  /** 実記録の代わりに見本の経過時間を表示する (Developer 向け) */
+  isLastJoinedSimulated: boolean;
   pinnedFriendIds: Record<string, boolean>;
   shownGroupIds: Record<string, boolean>;
   collapsedGroupIds: Record<string, boolean>;
@@ -42,6 +44,7 @@ export function InstancesScreen({
   groups,
   groupState,
   lastJoinedAt,
+  isLastJoinedSimulated,
   pinnedFriendIds,
   shownGroupIds,
   collapsedGroupIds,
@@ -112,6 +115,7 @@ export function InstancesScreen({
               groups={groups}
               groupState={groupState}
               lastJoinedAt={lastJoinedAt}
+              isLastJoinedSimulated={isLastJoinedSimulated}
               shownGroupIds={shownGroupIds}
               collapsedGroupIds={collapsedGroupIds}
               onToggleCollapsed={onToggleGroupCollapsed}

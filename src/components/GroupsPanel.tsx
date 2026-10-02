@@ -13,6 +13,8 @@ interface GroupsPanelProps {
   groupState: GroupInstancesState;
   /** グループインスタンスの location → 自分が最後に入った時刻 (epoch ms) */
   lastJoinedAt: LastJoinedAt;
+  /** 実記録の代わりに見本の経過時間を表示する (Developer 向け) */
+  isLastJoinedSimulated: boolean;
   shownGroupIds: Record<string, boolean>;
   collapsedGroupIds: Record<string, boolean>;
   onToggleCollapsed: (groupId: string) => void;
@@ -33,10 +35,14 @@ const ACCESS_TYPE_LABELS: Record<GroupAccessType, string> = {
   members: "Group",
 };
 
+/** Simulate last joined 中に、表示順で循環させて割り当てる経過時間 (ms)。桁数の違う表示を一通り確認できる */
+const SIMULATED_ELAPSED_MS = [0, 12 * 60_000, (3 * 60 + 5) * 60_000, (23 * 60 + 59) * 60_000];
+
 export function GroupsPanel({
   groups,
   groupState,
   lastJoinedAt,
+  isLastJoinedSimulated,
   shownGroupIds,
   collapsedGroupIds,
   onToggleCollapsed,
@@ -130,8 +136,10 @@ export function GroupsPanel({
                       <div className="group-list-message">{hasLoadFailed && !isLoading ? "Failed to load instances" : "Loading…"}</div>
                     )}
                     {instancesByGroup && count === 0 && <div className="group-list-message">No instances</div>}
-                    {rows.map((instance) => {
-                      const joinedAt = lastJoinedAt[instance.id];
+                    {rows.map((instance, index) => {
+                      const joinedAt = isLastJoinedSimulated
+                        ? elapsedNow - SIMULATED_ELAPSED_MS[index % SIMULATED_ELAPSED_MS.length]
+                        : lastJoinedAt[instance.id];
                       const elapsed = joinedAt === undefined ? null : formatElapsed(joinedAt, elapsedNow);
                       return (
                         <div key={instance.id} className="instance-row">

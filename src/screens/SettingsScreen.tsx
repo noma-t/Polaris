@@ -77,6 +77,12 @@ export function SettingsScreen({ version, appSettings, onUpdateAppSettings, upda
             onToggle={(thumbnailMode) => void saveAppSettings({ thumbnailMode }, "Failed to save Thumbnail mode")}
           />
           <ToggleSettingRow
+            title="Simulate last joined"
+            description="グループインスタンスの「最後に入ってからの経過時間」を、実際の記録の代わりに見本の値（0m / 12m / 3h05m / 23h59m）で表示します。実際の記録は変更されません。"
+            isOn={appSettings.simulateLastJoined}
+            onToggle={(simulateLastJoined) => void saveAppSettings({ simulateLastJoined }, "Failed to save Simulate last joined")}
+          />
+          <ToggleSettingRow
             title="Auth logging"
             description="VRChat API へのリクエストと、認証・バックグラウンド取得・自動更新・ウィンドウ状態などの出来事をログファイルに詳しく記録します。cookie やパスワードの値は記録しません。"
             isOn={appSettings.authLogging}

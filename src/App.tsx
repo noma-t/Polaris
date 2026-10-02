@@ -213,6 +213,7 @@ export default function App() {
                       groups={groups}
                       groupState={groupState}
                       lastJoinedAt={lastJoinedAt}
+                      isLastJoinedSimulated={(appSettings?.developerMode && appSettings.simulateLastJoined) ?? false}
                       pinnedFriendIds={displayedPinnedFriendIds}
                       shownGroupIds={shownGroupIds}
                       collapsedGroupIds={collapsedGroupIds}
