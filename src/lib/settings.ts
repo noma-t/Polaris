@@ -24,7 +24,9 @@ export interface AppSettings {
   simulateUpdateAvailable: boolean;
   /** サムネイル撮影用に、実 Friends を隠してダミーの Friends を表示する (developerMode が有効な場合のみ効く) */
   thumbnailMode: boolean;
-  /** VRChat API へのリクエストと認証まわりの出来事を `auth.log` に記録する (developerMode が有効な場合のみ効く) */
+  /** グループインスタンスの「最後に入ってからの経過時間」を実記録の代わりに見本の値で表示する (developerMode が有効な場合のみ効く) */
+  simulateLastJoined: boolean;
+  /** VRChat API へのリクエストと、認証・バックグラウンド取得・自動更新・ウィンドウ状態などの診断情報を `auth.log` に記録する (developerMode が有効な場合のみ効く) */
   authLogging: boolean;
   /** × でシステムトレイに格納し、ウィンドウを閉じている間もグループインスタンスの観測を続ける */
   runInBackground: boolean;
@@ -39,6 +41,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   developerMode: false,
   simulateUpdateAvailable: false,
   thumbnailMode: false,
+  simulateLastJoined: false,
   authLogging: false,
   runInBackground: false,
   launchAtStartup: false,

@@ -34,6 +34,8 @@ pub enum PipelineEvent {
     FriendDelete { user_id: String },
     /// group の参加 / 脱退
     GroupsChanged,
+    /// 自分がインスタンスに入った (到着後の `wrld_…:…` 形式の location のみ)
+    UserLocation { location: String },
 }
 
 #[derive(Deserialize)]
@@ -88,10 +90,15 @@ pub fn parse_message(text: &str) -> Option<PipelineEvent> {
         }
         "friend-delete" => PipelineEvent::FriendDelete { user_id: friend()?.user_id },
         "group-joined" | "group-left" => PipelineEvent::GroupsChanged,
+        // 自分宛てのイベントなので userId は見ない。移動中 (`traveling`) や private は到着後の通知を待つ
+        "user-location" => {
+            let location = friend()?.location;
+            location.starts_with("wrld_").then_some(PipelineEvent::UserLocation { location })?
+        }
         _ => return None,
     };
     let has_user_id = match &event {
-        PipelineEvent::Connected | PipelineEvent::GroupsChanged => true,
+        PipelineEvent::Connected | PipelineEvent::GroupsChanged | PipelineEvent::UserLocation { .. } => true,
         PipelineEvent::FriendOnline { user_id, .. }
         | PipelineEvent::FriendActive { user_id, .. }
         | PipelineEvent::FriendOffline { user_id }
@@ -230,6 +237,23 @@ mod tests {
         let unknown = wrap("notification", serde_json::json!({ "id": "not_1" }));
         assert!(parse_message(&unknown).is_none());
         assert!(parse_message("not json").is_none());
+    }
+
+    #[test]
+    fn parses_own_location_without_user_id() {
+        let text = wrap("user-location", serde_json::json!({ "location": "wrld_abc:123~group(grp_1)" }));
+        assert!(matches!(
+            parse_message(&text),
+            Some(PipelineEvent::UserLocation { location }) if location == "wrld_abc:123~group(grp_1)"
+        ));
+    }
+
+    #[test]
+    fn ignores_own_location_while_traveling_or_private() {
+        for location in ["traveling", "private", "offline", ""] {
+            let text = wrap("user-location", serde_json::json!({ "userId": "usr_1", "location": location }));
+            assert!(parse_message(&text).is_none(), "{location:?} should be ignored");
+        }
     }
 
     #[test]

@@ -170,6 +170,13 @@ export const RefreshIcon = (p: IconProps) => (
   </StrokeIcon>
 );
 
+export const MapPinIcon = (p: IconProps) => (
+  <StrokeIcon {...p}>
+    <path d="M12 21.5s-7-6.2-7-11.5a7 7 0 0 1 14 0c0 5.3-7 11.5-7 11.5z" />
+    <circle cx="12" cy="10" r="2.5" />
+  </StrokeIcon>
+);
+
 export const UsersIcon = (p: IconProps) => (
   <StrokeIcon {...p}>
     <circle cx="9" cy="8" r="3.2" />

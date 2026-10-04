@@ -30,6 +30,8 @@ pub struct AppSettings {
     pub simulate_update_available: bool,
     /// サムネイル撮影用に、実 Friends を隠してダミーの Friends を表示する (developer_mode が有効な場合のみ効く)
     pub thumbnail_mode: bool,
+    /// グループインスタンスの「最後に入ってからの経過時間」を実記録の代わりに見本の値で表示する (developer_mode が有効な場合のみ効く)
+    pub simulate_last_joined: bool,
     /// VRChat API へのリクエストと認証まわりの出来事を `auth.log` に記録する (developer_mode が有効な場合のみ効く)
     pub auth_logging: bool,
     /// × でシステムトレイに格納し、ウィンドウを閉じている間もグループインスタンスの観測を続ける
@@ -51,6 +53,7 @@ impl Default for AppSettings {
             developer_mode: false,
             simulate_update_available: false,
             thumbnail_mode: false,
+            simulate_last_joined: false,
             auth_logging: false,
             run_in_background: false,
             launch_at_startup: false,
@@ -198,6 +201,14 @@ pub fn settings_save_app(
     let launcher_path = settings.launcher_path.clone();
     let run_in_background = settings.run_in_background;
     let is_auth_logging_enabled = settings.is_auth_logging_enabled();
+    // launcher_path は記録しない (ユーザー名を含みうる)
+    auth_log::log!(
+        "settings: saved runInBackground={} launchAtStartup={} developerMode={} authLogging={}",
+        settings.run_in_background,
+        settings.launch_at_startup,
+        settings.developer_mode,
+        settings.auth_logging
+    );
     file.app = settings;
     write_file(&path, &file)?;
     game.set_launcher_path(&app, launcher_path);

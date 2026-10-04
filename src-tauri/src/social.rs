@@ -13,14 +13,15 @@ use tokio::sync::mpsc;
 
 use crate::auth_log;
 use crate::background;
-use crate::instance_store;
+use crate::instance_store::{self, StoredInstances};
 use crate::pipeline::{self, PipelineEvent};
-use crate::vrchat_client::{AuthError, VrchatClient, FRIENDS_PAGE_SIZE};
+use crate::vrchat_client::{AuthError, AuthUserResponse, VrchatClient, FRIENDS_PAGE_SIZE};
 use crate::vrchat_models::{ApiFriend, ApiGroupInstance, ApiInstance, ApiInstanceDetail};
 
 pub const FRIENDS_UPDATED_EVENT: &str = "social://friends-updated";
 pub const GROUPS_UPDATED_EVENT: &str = "social://groups-updated";
 pub const SESSION_EXPIRED_EVENT: &str = "social://session-expired";
+pub const LAST_JOINED_UPDATED_EVENT: &str = "social://last-joined-updated";
 
 /// World 名の取得は 1 秒に 1 件まで
 const WORLD_FETCH_INTERVAL: Duration = Duration::from_secs(1);
@@ -29,9 +30,11 @@ const WORLD_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// 429 を受けたときに World 名の取得を止める時間
 const RATE_LIMIT_PAUSE: Duration = Duration::from_secs(60);
 /// fetchedAt から次にグループインスタンスを全体取得するまでの間隔 (フロントエンドの自動更新と揃える)
-const GROUP_INSTANCES_REFRESH_INTERVAL: Duration = Duration::from_secs(90);
+const GROUP_INSTANCES_REFRESH_INTERVAL: Duration = Duration::from_secs(120);
 /// 端末と VRChat の時計のずれで fetchedAt + 間隔 が過ぎていても、連続取得しないよう最低限空ける時間
 const GROUP_INSTANCES_MIN_REFRESH_DELAY: Duration = Duration::from_secs(10);
+/// 自分が最後にインスタンスに入った時刻を残す期間。経過がこれ以上になった記録は破棄する (表示は最大 23h59m)
+const LAST_JOINED_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -327,6 +330,15 @@ fn group_instances_refresh_delay(fetched_at_ms: i64, now_ms: i64) -> Duration {
     Duration::from_millis((fetched_at_ms + interval_ms - now_ms).clamp(min_ms, interval_ms) as u64)
 }
 
+/// フロントエンドから呼ばれた取得コマンドの結果と所要時間を記録する
+fn log_command_result(name: &str, started_at: Instant, result: Result<usize, &AuthError>) {
+    let elapsed_ms = started_at.elapsed().as_millis();
+    match result {
+        Ok(count) => auth_log::log!("command: {name} -> ok, {count} items ({elapsed_ms} ms)"),
+        Err(error) => auth_log::log!("command: {name} -> failed: {error} ({elapsed_ms} ms)"),
+    }
+}
+
 #[derive(Default)]
 struct SocialStore {
     /// start / stop のたびに進める。古いセッションのタスクによる書き込みを捨てるために使う
@@ -342,9 +354,27 @@ struct SocialStore {
     instance_seen: HashMap<String, SeenInstance>,
     /// 次に初めて見るグループインスタンスに振る Created ソート用の値
     next_created_order: u32,
+    /// グループインスタンスの location → 自分が最後に入った時刻 (epoch ms)
+    last_joined: HashMap<String, i64>,
 }
 
 impl SocialStore {
+    /// 自分がインスタンスに入ったことを記録する。グループインスタンス以外は記録せず、記録したときだけ true
+    fn record_joined(&mut self, location: &str, now_ms: i64) -> bool {
+        if location_param(location, "group").is_none() {
+            return false;
+        }
+        self.last_joined.insert(location.to_owned(), now_ms);
+        self.prune_last_joined(now_ms);
+        true
+    }
+
+    /// 入ってから 24 時間以上経った記録を破棄する
+    fn prune_last_joined(&mut self, now_ms: i64) {
+        self.last_joined.retain(|_, joined_at| now_ms - *joined_at < LAST_JOINED_TTL_MS);
+    }
+
+
     fn friend_views(&self) -> Vec<FriendView> {
         self.friends
             .values()
@@ -541,10 +571,17 @@ impl SocialStore {
                 self.friends.remove(user_id);
                 self.pinned.remove(user_id);
             }
-            PipelineEvent::Connected | PipelineEvent::GroupsChanged => return false,
+            // 入室の記録は Friends の snapshot に関係しないので、Session 側で処理する
+            PipelineEvent::Connected | PipelineEvent::GroupsChanged | PipelineEvent::UserLocation { .. } => return false,
         }
         true
     }
+}
+
+/// 401 のあとの `/auth/user` の結果から、セッションが失効したかを判断する。
+/// 通信エラーなどで確認できなかったときは、失効扱いにしない
+fn is_session_expired(verification: &Result<AuthUserResponse, AuthError>) -> bool {
+    matches!(verification, Ok(AuthUserResponse::Unauthorized | AuthUserResponse::RequiresTwoFactor(_)))
 }
 
 /// 1 セッション (ログイン中) のタスクが共有するもの
@@ -576,16 +613,36 @@ impl Session {
         }
     }
 
-    fn handle_error(&self, error: &AuthError) {
+    fn emit_last_joined(&self) {
+        if let Some(last_joined) = self.with_store(|store| store.last_joined.clone()) {
+            let _ = self.app.emit(LAST_JOINED_UPDATED_EVENT, last_joined);
+        }
+    }
+
+    /// API のエラーを処理し、呼び出し元へ返すエラーを返す。
+    /// 401 は一時的に返ることがあるので、`/auth/user` で失効を確かめてからサインアウトさせる。
+    /// 失効していなければセッションを保ち、呼び出し元には (サインアウトを伴わない) 別のエラーを返す
+    async fn handle_error(&self, error: AuthError) -> AuthError {
         if !matches!(error, AuthError::Unauthorized) {
-            return;
+            return error;
         }
-        if self.with_store(|_| ()).is_some() {
-            auth_log::log!("session: unauthorized; notifying session-expired");
-            let _ = self.app.emit(SESSION_EXPIRED_EVENT, ());
-        } else {
+        if self.with_store(|_| ()).is_none() {
             auth_log::log!("session: unauthorized after sign-out; ignored");
+            return error;
         }
+        let verification = self.client.get_current_user().await;
+        if !is_session_expired(&verification) {
+            auth_log::log!("session: unauthorized, but the session could not be confirmed as expired; keeping it");
+            return AuthError::Unexpected("VRChat rejected the request, but the session is still valid. Please try again.".into());
+        }
+        // 確認している間にサインアウトされていたら通知しない
+        if self.with_store(|_| ()).is_none() {
+            auth_log::log!("session: unauthorized after sign-out; ignored");
+            return error;
+        }
+        auth_log::log!("session: unauthorized; notifying session-expired");
+        let _ = self.app.emit(SESSION_EXPIRED_EVENT, ());
+        error
     }
 
     async fn fetch_all_friends(&self, offline: bool) -> Result<Vec<ApiFriend>, AuthError> {
@@ -604,10 +661,14 @@ impl Session {
         let result = async { Ok::<_, AuthError>((self.fetch_all_friends(false).await?, self.fetch_all_friends(true).await?)) }.await;
         match result {
             Ok((online, offline)) => {
+                auth_log::log!("sync: friends online={} offline={}", online.len(), offline.len());
                 self.with_store(|store| store.replace_friends(online, offline));
                 self.emit_friends();
             }
-            Err(error) => self.handle_error(&error),
+            Err(error) => {
+                auth_log::log!("sync: friends failed: {error}");
+                self.handle_error(error).await;
+            }
         }
     }
 
@@ -620,10 +681,14 @@ impl Session {
                     .map(|g| GroupView { id: g.group_id, name: g.name })
                     .collect();
                 groups.sort_by(|a, b| a.name.cmp(&b.name));
+                auth_log::log!("sync: groups count={}", groups.len());
                 self.with_store(|store| store.groups = groups);
                 self.emit_groups();
             }
-            Err(error) => self.handle_error(&error),
+            Err(error) => {
+                auth_log::log!("sync: groups failed: {error}");
+                self.handle_error(error).await;
+            }
         }
     }
 
@@ -643,12 +708,24 @@ impl Session {
                 // 初回は start 時の同期で足りる。再接続時は切断中の変化を取り戻すため再同期する
                 PipelineEvent::Connected => {
                     if has_connected {
+                        auth_log::log!("pipeline: reconnected; resyncing friends and groups");
                         self.sync_friends().await;
                         self.sync_groups().await;
                     }
                     has_connected = true;
                 }
-                PipelineEvent::GroupsChanged => self.sync_groups().await,
+                PipelineEvent::GroupsChanged => {
+                    auth_log::log!("pipeline: groups changed; resyncing groups");
+                    self.sync_groups().await;
+                }
+                PipelineEvent::UserLocation { location } => {
+                    let is_recorded = self.with_store(|store| store.record_joined(location, now_epoch_ms())) == Some(true);
+                    auth_log::log!("pipeline: own location changed to {location}; recorded as a group instance join={is_recorded}");
+                    if is_recorded {
+                        self.emit_last_joined();
+                        self.persist_instance_seen();
+                    }
+                }
                 _ => {
                     if self.with_store(|store| store.apply(&event)) == Some(true) {
                         self.emit_friends();
@@ -662,35 +739,44 @@ impl Session {
     async fn fetch_group_instances(&self) -> Result<GroupInstanceListView, AuthError> {
         let list = match self.client.get_user_group_instances(&self.user_id).await {
             Ok(list) => list,
-            Err(error) => {
-                self.handle_error(&error);
-                return Err(error);
-            }
+            Err(error) => return Err(self.handle_error(error).await),
         };
         let now_ms = now_epoch_ms();
         let parsed = parse_rfc3339_ms(&list.fetched_at);
         let fetched_at = parsed.unwrap_or(now_ms);
         let next_in = group_instances_refresh_delay(fetched_at, now_ms).as_secs_f64();
-        match parsed {
-            Some(ms) => eprintln!(
+        let message = match parsed {
+            Some(ms) => format!(
                 "[group-instances] fetchedAt={} (raw={:?}, age={:.1}s, next in {next_in:.1}s)",
                 format_local_time(ms),
                 list.fetched_at,
                 (now_ms - ms) as f64 / 1000.0,
             ),
-            None => eprintln!("[group-instances] fetchedAt={:?} (unparsed; using local time, next in {next_in:.1}s)", list.fetched_at),
-        }
-        let view = self
+            None => format!("[group-instances] fetchedAt={:?} (unparsed; using local time, next in {next_in:.1}s)", list.fetched_at),
+        };
+        eprintln!("{message}");
+        auth_log::log!("{message}");
+        let received = list.instances.len();
+        let Some(view) = self
             .with_store(|store| GroupInstanceListView { fetched_at, instances: store.apply_group_instances(list.instances, now_ms) })
-            .ok_or(AuthError::Unauthorized)?;
+        else {
+            auth_log::log!("group instances: result discarded (signed out while fetching)");
+            return Err(AuthError::Unauthorized);
+        };
+        auth_log::log!("group instances: applied {} of {received} received instances", view.instances.len());
         self.persist_instance_seen();
         Ok(view)
     }
 
     /// 観測済みのグループインスタンスの記録を保存する。ファイル書き込みは store のロック外で行う
     fn persist_instance_seen(&self) {
-        if let Some((seen, next_created_order)) = self.with_store(|store| (store.instance_seen.clone(), store.next_created_order)) {
-            instance_store::save(&self.app, &self.user_id, seen, next_created_order);
+        let stored = self.with_store(|store| StoredInstances {
+            seen: store.instance_seen.clone(),
+            next_created_order: store.next_created_order,
+            last_joined: store.last_joined.clone(),
+        });
+        if let Some(stored) = stored {
+            instance_store::save(&self.app, &self.user_id, stored);
         }
     }
 
@@ -698,10 +784,7 @@ impl Session {
     async fn fetch_instance_detail(&self, location: &str) -> Result<InstanceDetailView, AuthError> {
         let detail: ApiInstanceDetail = match self.client.get_instance(location).await {
             Ok(detail) => detail,
-            Err(error) => {
-                self.handle_error(&error);
-                return Err(error);
-            }
+            Err(error) => return Err(self.handle_error(error).await),
         };
         let (instance_type, host) = instance_type_from_location(location);
         let host_name = match host {
@@ -736,7 +819,7 @@ impl Session {
             }
             Ok(_) => None,
             Err(error) => {
-                self.handle_error(&error);
+                self.handle_error(error).await;
                 None
             }
         }
@@ -746,20 +829,52 @@ impl Session {
     /// 次の取得は fetchedAt + 取得間隔 に行い、取得できなかったときは取得間隔だけ待つ
     async fn run_background_group_poll(self) {
         let mut delay = GROUP_INSTANCES_REFRESH_INTERVAL;
-        loop {
+        for cycle in 1_u64.. {
+            let slept_from = Instant::now();
+            let wall_from = now_epoch_ms();
+            auth_log::log!("background poll #{cycle}: sleeping {:.1}s", delay.as_secs_f64());
             tokio::time::sleep(delay).await;
-            if !background::should_poll_in_background(&self.app) {
+            // 単調時計と壁時計の進みが大きく違うときは、スリープからの復帰や時計の変更を疑えるよう記録する
+            let slept = slept_from.elapsed();
+            let wall_elapsed_ms = now_epoch_ms() - wall_from;
+            let clock_skew_ms = wall_elapsed_ms - slept.as_millis() as i64;
+            let skew_note = if clock_skew_ms.abs() > 5_000 {
+                format!(" (wall clock advanced {:+.1}s vs monotonic: system sleep or clock change?)", clock_skew_ms as f64 / 1000.0)
+            } else {
+                String::new()
+            };
+            let conditions = background::poll_conditions(&self.app);
+            let should_poll = conditions.should_poll();
+            auth_log::log!(
+                "background poll #{cycle}: woke after {:.1}s{skew_note}; {conditions:?} -> {}",
+                slept.as_secs_f64(),
+                if should_poll { "fetch" } else { "skip (window is visible, or run in background is off)" }
+            );
+            if !should_poll {
                 delay = GROUP_INSTANCES_REFRESH_INTERVAL;
                 continue;
             }
-            delay = match self.fetch_group_instances().await {
-                Ok(list) => group_instances_refresh_delay(list.fetched_at, now_epoch_ms()),
-                Err(AuthError::RateLimited) => RATE_LIMIT_PAUSE + GROUP_INSTANCES_REFRESH_INTERVAL,
+            let fetch_started = Instant::now();
+            let result = self.fetch_group_instances().await;
+            let fetch_ms = fetch_started.elapsed().as_millis();
+            delay = match result {
+                Ok(list) => {
+                    let next = group_instances_refresh_delay(list.fetched_at, now_epoch_ms());
+                    auth_log::log!("background poll #{cycle}: fetched {} instances in {fetch_ms} ms", list.instances.len());
+                    next
+                }
+                Err(AuthError::RateLimited) => {
+                    auth_log::log!("background poll #{cycle}: rate limited after {fetch_ms} ms; pausing");
+                    RATE_LIMIT_PAUSE + GROUP_INSTANCES_REFRESH_INTERVAL
+                }
                 Err(AuthError::Unauthorized) => {
-                    auth_log::log!("background poll: stopped (unauthorized)");
+                    auth_log::log!("background poll #{cycle}: stopped (unauthorized) after {fetch_ms} ms");
                     return;
                 }
-                Err(_) => GROUP_INSTANCES_REFRESH_INTERVAL,
+                Err(error) => {
+                    auth_log::log!("background poll #{cycle}: failed after {fetch_ms} ms: {error}; retrying later");
+                    GROUP_INSTANCES_REFRESH_INTERVAL
+                }
             };
         }
     }
@@ -777,9 +892,17 @@ impl Session {
                     self.with_store(|store| store.world_names.insert(world_id, world.name));
                     self.emit_friends();
                 }
-                Err(AuthError::RateLimited) => tokio::time::sleep(RATE_LIMIT_PAUSE).await,
-                Err(error @ AuthError::Unauthorized) => return self.handle_error(&error),
-                Err(_) => {
+                Err(AuthError::RateLimited) => {
+                    auth_log::log!("world queue: rate limited; pausing {}s", RATE_LIMIT_PAUSE.as_secs());
+                    tokio::time::sleep(RATE_LIMIT_PAUSE).await;
+                }
+                Err(error) => {
+                    auth_log::log!("world queue: failed to fetch {world_id}: {error}");
+                    // 401 が失効ではなかったときは、他の失敗と同じく後で再試行する
+                    if matches!(self.handle_error(error).await, AuthError::Unauthorized) {
+                        auth_log::log!("world queue: stopped (unauthorized)");
+                        return;
+                    }
                     self.with_store(|store| store.world_retry_at.insert(world_id, Instant::now() + WORLD_RETRY_DELAY));
                 }
             }
@@ -803,24 +926,27 @@ impl SocialState {
     /// 初期同期・pipeline・World 名取得・バックグラウンド中の定期取得のタスクを起動する
     pub fn start(&self, app: AppHandle, client: VrchatClient, user_id: String) {
         self.stop();
-        let (instance_seen, next_created_order) = instance_store::load(&app, &user_id);
+        let stored = instance_store::load(&app, &user_id);
         let generation = {
             let mut store = self.store.lock().expect("social store poisoned");
-            store.instance_seen = instance_seen;
-            store.next_created_order = next_created_order;
+            store.instance_seen = stored.seen;
+            store.next_created_order = stored.next_created_order;
+            store.last_joined = stored.last_joined;
+            store.prune_last_joined(now_epoch_ms());
             store.generation
         };
         let session = Session { app, client, user_id, store: self.store.clone(), generation };
 
+        auth_log::log!("social: started user={} generation={generation}", session.user_id);
         let initial_sync = session.clone();
         let tasks = vec![
-            tauri::async_runtime::spawn(async move {
+            auth_log::spawn_logged("initial sync", async move {
                 initial_sync.sync_friends().await;
                 initial_sync.sync_groups().await;
             }),
-            tauri::async_runtime::spawn(session.clone().run_pipeline()),
-            tauri::async_runtime::spawn(session.clone().run_world_queue()),
-            tauri::async_runtime::spawn(session.clone().run_background_group_poll()),
+            auth_log::spawn_logged("pipeline", session.clone().run_pipeline()),
+            auth_log::spawn_logged("world queue", session.clone().run_world_queue()),
+            auth_log::spawn_logged("background group poll", session.clone().run_background_group_poll()),
         ];
         *self.tasks.lock().expect("social tasks poisoned") = tasks;
         *self.session.lock().expect("social session poisoned") = Some(session);
@@ -828,9 +954,14 @@ impl SocialState {
 
     /// ログアウト時に呼ぶ。全タスクを止めて状態を破棄する
     pub fn stop(&self) {
-        for task in self.tasks.lock().expect("social tasks poisoned").drain(..) {
+        let mut tasks = self.tasks.lock().expect("social tasks poisoned");
+        if !tasks.is_empty() {
+            auth_log::log!("social: stopping {} tasks", tasks.len());
+        }
+        for task in tasks.drain(..) {
             task.abort();
         }
+        drop(tasks);
         *self.session.lock().expect("social session poisoned") = None;
         let mut store = self.store.lock().expect("social store poisoned");
         let generation = store.generation + 1;
@@ -845,33 +976,62 @@ impl SocialState {
         self.store.lock().expect("social store poisoned").groups.clone()
     }
 
+    /// 自分が最後にグループインスタンスに入った時刻 (location → epoch ms)。24 時間以上前の記録は返さない
+    pub fn last_joined_views(&self) -> HashMap<String, i64> {
+        let mut store = self.store.lock().expect("social store poisoned");
+        store.prune_last_joined(now_epoch_ms());
+        store.last_joined.clone()
+    }
+
     /// 所属する全グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
     pub async fn fetch_group_instances(&self) -> Result<GroupInstanceListView, AuthError> {
-        let session = self.session.lock().expect("social session poisoned").clone().ok_or(AuthError::Unauthorized)?;
-        session.fetch_group_instances().await
+        let Some(session) = self.session.lock().expect("social session poisoned").clone() else {
+            auth_log::log!("command: fetch group instances -> no session");
+            return Err(AuthError::Unauthorized);
+        };
+        auth_log::log!("command: fetch group instances (from the UI)");
+        let started_at = Instant::now();
+        let result = session.fetch_group_instances().await;
+        log_command_result("fetch group instances", started_at, result.as_ref().map(|list| list.instances.len()));
+        result
     }
 
     /// 指定した 1 グループのインスタンスを取得する。ログアウト後に完了した結果は捨てる
     pub async fn fetch_instances_of_group(&self, group_id: &str) -> Result<Vec<GroupInstanceView>, AuthError> {
-        let session = self.session.lock().expect("social session poisoned").clone().ok_or(AuthError::Unauthorized)?;
-        let instances = match session.client.get_group_instances(group_id).await {
-            Ok(instances) => instances,
-            Err(error) => {
-                session.handle_error(&error);
-                return Err(error);
-            }
+        let name = format!("fetch instances of {group_id}");
+        let Some(session) = self.session.lock().expect("social session poisoned").clone() else {
+            auth_log::log!("command: {name} -> no session");
+            return Err(AuthError::Unauthorized);
         };
-        let views = session
-            .with_store(|store| store.apply_instances_of_group(group_id, instances, now_epoch_ms()))
-            .ok_or(AuthError::Unauthorized)?;
-        session.persist_instance_seen();
-        Ok(views)
+        auth_log::log!("command: {name} (manual refresh from the UI)");
+        let started_at = Instant::now();
+        let result = async {
+            let instances = match session.client.get_group_instances(group_id).await {
+                Ok(instances) => instances,
+                Err(error) => return Err(session.handle_error(error).await),
+            };
+            let views = session
+                .with_store(|store| store.apply_instances_of_group(group_id, instances, now_epoch_ms()))
+                .ok_or(AuthError::Unauthorized)?;
+            session.persist_instance_seen();
+            Ok(views)
+        }
+        .await;
+        log_command_result(&name, started_at, result.as_ref().map(Vec::len));
+        result
     }
 
     /// フレンドがいるインスタンスの詳細を取得する
     pub async fn fetch_instance_detail(&self, location: &str) -> Result<InstanceDetailView, AuthError> {
-        let session = self.session.lock().expect("social session poisoned").clone().ok_or(AuthError::Unauthorized)?;
-        session.fetch_instance_detail(location).await
+        let name = format!("fetch instance detail {location}");
+        let Some(session) = self.session.lock().expect("social session poisoned").clone() else {
+            auth_log::log!("command: {name} -> no session");
+            return Err(AuthError::Unauthorized);
+        };
+        let started_at = Instant::now();
+        let result = session.fetch_instance_detail(location).await;
+        log_command_result(&name, started_at, result.as_ref().map(|_| 1));
+        result
     }
 
     /// pinned を置き換え、`is_world_loading` が変わるので snapshot を返す
@@ -885,6 +1045,7 @@ impl SocialState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vrchat_client::CurrentUser;
     use crate::vrchat_models::{ApiGroupInstanceWorld, ApiWorld};
 
     fn api_friend(id: &str, status: &str, location: &str) -> ApiFriend {
@@ -899,6 +1060,17 @@ mod tests {
 
     fn view<'a>(views: &'a [FriendView], id: &str) -> &'a FriendView {
         views.iter().find(|v| v.id == id).expect("friend not found")
+    }
+
+    #[test]
+    fn signs_out_only_when_auth_user_confirms_expiry() {
+        let user = CurrentUser { id: "usr_1".into(), display_name: "A".into(), icon_url: None };
+        assert!(is_session_expired(&Ok(AuthUserResponse::Unauthorized)));
+        assert!(is_session_expired(&Ok(AuthUserResponse::RequiresTwoFactor(vec![]))));
+        assert!(!is_session_expired(&Ok(AuthUserResponse::SignedIn(user))));
+        // 確認できなかったときは、誤って失効扱いにしないようサインアウトさせない
+        assert!(!is_session_expired(&Err(AuthError::Network("offline".into()))));
+        assert!(!is_session_expired(&Err(AuthError::RateLimited)));
     }
 
     #[test]
@@ -1140,12 +1312,12 @@ mod tests {
     #[test]
     fn schedules_next_group_poll_from_fetched_at() {
         let now = 1_000_000;
-        assert_eq!(group_instances_refresh_delay(now, now), Duration::from_secs(90));
-        assert_eq!(group_instances_refresh_delay(now - 30_000, now), Duration::from_secs(60));
+        assert_eq!(group_instances_refresh_delay(now, now), Duration::from_secs(120));
+        assert_eq!(group_instances_refresh_delay(now - 30_000, now), Duration::from_secs(90));
         // 時計のずれで予定が過ぎていても連続取得しない
-        assert_eq!(group_instances_refresh_delay(now - 120_000, now), Duration::from_secs(10));
+        assert_eq!(group_instances_refresh_delay(now - 150_000, now), Duration::from_secs(10));
         // fetchedAt が未来でも取得間隔より長くは待たない
-        assert_eq!(group_instances_refresh_delay(now + 60_000, now), Duration::from_secs(90));
+        assert_eq!(group_instances_refresh_delay(now + 60_000, now), Duration::from_secs(120));
     }
 
     #[test]
@@ -1157,5 +1329,45 @@ mod tests {
         store.world_retry_at.insert("wrld_z".into(), now + WORLD_RETRY_DELAY);
         assert_eq!(store.next_world_to_fetch(now), None);
         assert_eq!(store.next_world_to_fetch(now + WORLD_RETRY_DELAY).as_deref(), Some("wrld_z"));
+    }
+
+    #[test]
+    fn records_last_joined_only_for_group_instances() {
+        let mut store = SocialStore::default();
+        assert!(store.record_joined("wrld_a:1~group(grp_1)~groupAccessType(plus)", 1_000));
+        assert!(!store.record_joined("wrld_a:2", 1_000));
+        assert!(!store.record_joined("wrld_a:3~private(usr_1)", 1_000));
+        assert_eq!(store.last_joined.len(), 1);
+    }
+
+    #[test]
+    fn overwrites_last_joined_when_entering_the_same_instance_again() {
+        let mut store = SocialStore::default();
+        store.record_joined("wrld_a:1~group(grp_1)", 1_000);
+        store.record_joined("wrld_a:1~group(grp_1)", 5_000);
+        assert_eq!(store.last_joined["wrld_a:1~group(grp_1)"], 5_000);
+    }
+
+    #[test]
+    fn drops_last_joined_after_24_hours() {
+        let mut store = SocialStore::default();
+        store.last_joined.insert("wrld_a:1~group(grp_1)".into(), 0);
+        store.last_joined.insert("wrld_b:2~group(grp_1)".into(), 1);
+
+        // 23h59m59.999s では残り、24h ちょうどで消える
+        store.prune_last_joined(LAST_JOINED_TTL_MS - 1);
+        assert_eq!(store.last_joined.len(), 2);
+        store.prune_last_joined(LAST_JOINED_TTL_MS);
+        assert_eq!(store.last_joined.len(), 1);
+        assert!(store.last_joined.contains_key("wrld_b:2~group(grp_1)"));
+    }
+
+    #[test]
+    fn prunes_expired_records_when_recording_a_new_join() {
+        let mut store = SocialStore::default();
+        store.last_joined.insert("wrld_old:1~group(grp_1)".into(), 0);
+        store.record_joined("wrld_new:1~group(grp_1)", LAST_JOINED_TTL_MS + 10);
+        assert!(!store.last_joined.contains_key("wrld_old:1~group(grp_1)"));
+        assert!(store.last_joined.contains_key("wrld_new:1~group(grp_1)"));
     }
 }

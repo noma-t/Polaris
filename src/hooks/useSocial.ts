@@ -2,12 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import {
   getFriends,
   getGroups,
+  getLastJoined,
   onFriendsUpdated,
   onGroupsUpdated,
+  onLastJoinedUpdated,
   onSessionExpired,
   setPinnedFriends,
   type Friend,
   type Group,
+  type LastJoinedAt,
 } from "../lib/social";
 
 interface UseSocialOptions {
@@ -23,6 +26,7 @@ interface UseSocialOptions {
 export function useSocial({ isSignedIn, pinnedFriendIds, onSessionExpired: handleSessionExpired }: UseSocialOptions) {
   const [friends, setFriends] = useState<Friend[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
+  const [lastJoinedAt, setLastJoinedAt] = useState<LastJoinedAt>({});
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const sessionExpiredRef = useRef(handleSessionExpired);
   sessionExpiredRef.current = handleSessionExpired;
@@ -31,6 +35,7 @@ export function useSocial({ isSignedIn, pinnedFriendIds, onSessionExpired: handl
     if (!isSignedIn) {
       setFriends([]);
       setGroups([]);
+      setLastJoinedAt({});
       setUpdatedAt(null);
       return;
     }
@@ -47,17 +52,24 @@ export function useSocial({ isSignedIn, pinnedFriendIds, onSessionExpired: handl
       setUpdatedAt(Date.now());
     };
 
+    const applyLastJoined = (next: LastJoinedAt) => {
+      if (isCancelled) return;
+      setLastJoinedAt(next);
+    };
+
     const subscriptions = Promise.all([
       onFriendsUpdated(applyFriends),
       onGroupsUpdated(applyGroups),
+      onLastJoinedUpdated(applyLastJoined),
       onSessionExpired(() => !isCancelled && sessionExpiredRef.current()),
     ]);
     subscriptions
-      .then(() => Promise.all([getFriends(), getGroups()]))
-      .then(([initialFriends, initialGroups]) => {
+      .then(() => Promise.all([getFriends(), getGroups(), getLastJoined()]))
+      .then(([initialFriends, initialGroups, initialLastJoined]) => {
         // 初期同期の完了前は空なので、emit 済みの値を空で上書きしない
         if (initialFriends.length) applyFriends(initialFriends);
         if (initialGroups.length) applyGroups(initialGroups);
+        if (Object.keys(initialLastJoined).length) applyLastJoined(initialLastJoined);
       })
       .catch(() => {
         // 取得に失敗しても以降の emit で更新される
@@ -77,5 +89,5 @@ export function useSocial({ isSignedIn, pinnedFriendIds, onSessionExpired: handl
     });
   }, [isSignedIn, pinnedFriendIds]);
 
-  return { friends, groups, updatedAt };
+  return { friends, groups, lastJoinedAt, updatedAt };
 }

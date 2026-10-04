@@ -1,5 +1,7 @@
 //! Friends / Groups の snapshot 取得・グループインスタンス取得と pinned friend 設定の Tauri コマンド。
 
+use std::collections::HashMap;
+
 use tauri::{AppHandle, Emitter, State};
 
 use crate::social::{FriendView, GroupInstanceListView, GroupInstanceView, GroupView, InstanceDetailView, SocialState, FRIENDS_UPDATED_EVENT};
@@ -14,6 +16,12 @@ pub fn social_get_friends(state: State<'_, SocialState>) -> Vec<FriendView> {
 #[tauri::command]
 pub fn social_get_groups(state: State<'_, SocialState>) -> Vec<GroupView> {
     state.group_views()
+}
+
+/// 自分が最後にグループインスタンスに入った時刻 (location → epoch ms) の現在の snapshot を返す
+#[tauri::command]
+pub fn social_get_last_joined(state: State<'_, SocialState>) -> HashMap<String, i64> {
+    state.last_joined_views()
 }
 
 /// 所属する全グループのインスタンスを VRChat API から取得する

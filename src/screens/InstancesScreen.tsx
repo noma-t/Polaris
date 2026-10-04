@@ -5,7 +5,7 @@ import { FriendIcon, GroupsIcon } from "../components/icons";
 import { useElementWidth } from "../hooks/useElementWidth";
 import type { GroupInstancesState } from "../hooks/useGroupInstances";
 import { DEFAULT_GROUPS_SHARE, type CollapsedPanel } from "../lib/settings";
-import type { Friend, Group } from "../lib/social";
+import type { Friend, Group, LastJoinedAt } from "../lib/social";
 
 export const MIN_GROUPS_WIDTH = 410;
 const MIN_FRIENDS_WIDTH = 240;
@@ -20,6 +20,10 @@ interface InstancesScreenProps {
   friends: Friend[];
   groups: Group[];
   groupState: GroupInstancesState;
+  /** グループインスタンスの location → 自分が最後に入った時刻 (epoch ms) */
+  lastJoinedAt: LastJoinedAt;
+  /** 実記録の代わりに見本の経過時間を表示する (Developer 向け) */
+  isLastJoinedSimulated: boolean;
   pinnedFriendIds: Record<string, boolean>;
   shownGroupIds: Record<string, boolean>;
   collapsedGroupIds: Record<string, boolean>;
@@ -39,6 +43,8 @@ export function InstancesScreen({
   friends,
   groups,
   groupState,
+  lastJoinedAt,
+  isLastJoinedSimulated,
   pinnedFriendIds,
   shownGroupIds,
   collapsedGroupIds,
@@ -108,6 +114,8 @@ export function InstancesScreen({
             <GroupsPanel
               groups={groups}
               groupState={groupState}
+              lastJoinedAt={lastJoinedAt}
+              isLastJoinedSimulated={isLastJoinedSimulated}
               shownGroupIds={shownGroupIds}
               collapsedGroupIds={collapsedGroupIds}
               onToggleCollapsed={onToggleGroupCollapsed}
