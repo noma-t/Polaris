@@ -1,8 +1,10 @@
 mod auth_commands;
+mod auth_log;
 mod background;
 mod credential_store;
 mod game_monitor;
 mod image_protocol;
+mod instance_store;
 mod pipeline;
 mod settings_store;
 mod social;
@@ -45,6 +47,16 @@ pub fn run() {
         .manage(BackgroundState::new())
         .setup(|app| {
             let settings = settings_store::load_app_settings(app.handle());
+            auth_log::init(app.handle(), settings.is_auth_logging_enabled());
+            auth_log::log!(
+                "app: started (Polaris {}, {} {}) runInBackground={} launchAtStartup={} developerMode={}",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                settings.run_in_background,
+                settings.launch_at_startup,
+                settings.developer_mode
+            );
             app.state::<GameState>().start_monitor(app.handle().clone(), settings.launcher_path);
             background::apply(app.handle(), settings.run_in_background);
             background::sync_autostart(app.handle(), settings.launch_at_startup);
@@ -52,6 +64,7 @@ pub fn run() {
         })
         // Run in background が有効なら、× ではプロセスを終了せずトレイに格納する
         .on_window_event(|window, event| {
+            background::log_window_event(window, event);
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.state::<BackgroundState>().is_enabled() {
                     api.prevent_close();
@@ -65,9 +78,12 @@ pub fn run() {
             auth_commands::auth_verify_two_factor,
             auth_commands::auth_restore_session,
             auth_commands::auth_logout,
+            auth_log::auth_log_open_folder,
+            auth_log::auth_log_write,
             social_commands::social_get_friends,
             social_commands::social_get_groups,
             social_commands::social_get_group_instances,
+            social_commands::social_get_last_joined,
             social_commands::social_get_instances_of_group,
             social_commands::social_get_instance_detail,
             social_commands::social_set_pinned_friends,

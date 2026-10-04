@@ -78,7 +78,11 @@ export interface InstanceDetail {
 export const getFriends = () => invoke<Friend[]>("social_get_friends");
 export const getGroups = () => invoke<Group[]>("social_get_groups");
 export const getGroupInstances = () => invoke<GroupInstanceList>("social_get_group_instances");
-export const getInstancesOfGroup = (groupId: string) => invoke<GroupInstance[]>("social_get_instances_of_group", { groupId });
+/** グループインスタンスの location → 自分が最後に入った時刻 (epoch ms)。24 時間以上前の記録は含まれない */
+export type LastJoinedAt = Record<string, number>;
+
+export const getLastJoined = () => invoke<LastJoinedAt>("social_get_last_joined");
+export const getInstancesOfGroup =(groupId: string) => invoke<GroupInstance[]>("social_get_instances_of_group", { groupId });
 export const getInstanceDetail = (location: string) => invoke<InstanceDetail>("social_get_instance_detail", { location });
 export const setPinnedFriends = (ids: string[]) => invoke<void>("social_set_pinned_friends", { ids });
 
@@ -86,5 +90,7 @@ export const onFriendsUpdated = (handler: (friends: Friend[]) => void): Promise<
   listen<Friend[]>("social://friends-updated", (event) => handler(event.payload));
 export const onGroupsUpdated = (handler: (groups: Group[]) => void): Promise<UnlistenFn> =>
   listen<Group[]>("social://groups-updated", (event) => handler(event.payload));
-export const onSessionExpired = (handler: () => void): Promise<UnlistenFn> =>
+export const onLastJoinedUpdated = (handler: (lastJoinedAt: LastJoinedAt) => void): Promise<UnlistenFn> =>
+  listen<LastJoinedAt>("social://last-joined-updated", (event) => handler(event.payload));
+export const onSessionExpired =(handler: () => void): Promise<UnlistenFn> =>
   listen("social://session-expired", () => handler());

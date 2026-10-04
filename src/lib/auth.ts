@@ -45,4 +45,10 @@ export const verifyTwoFactor = (method: TwoFactorMethod, code: string) =>
 
 export const restoreSession = () => invoke<CurrentUser | null>("auth_restore_session");
 
-export const logout = () => invoke<void>("auth_logout");
+/** サインアウトのきっかけ。認証ログに記録する */
+export type SignOutReason = "user" | "sessionExpired";
+
+export const logout = (reason: SignOutReason) => invoke<void>("auth_logout", { reason });
+
+/** 認証ログ (`auth.log`) の保存先フォルダを開く */
+export const openAuthLogFolder = () => invoke<void>("auth_log_open_folder");

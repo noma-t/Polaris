@@ -2,6 +2,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { CheckIcon, DownloadIcon, ErrorIcon, SpinnerIcon } from "../components/icons";
 import type { UpdaterState, UpdateStatus } from "../hooks/useUpdater";
+import { openAuthLogFolder } from "../lib/auth";
 import { formatDateTime } from "../lib/format";
 import { DEFAULT_LAUNCHER_PATH, type AppSettings } from "../lib/settings";
 
@@ -75,6 +76,30 @@ export function SettingsScreen({ version, appSettings, onUpdateAppSettings, upda
             isOn={appSettings.thumbnailMode}
             onToggle={(thumbnailMode) => void saveAppSettings({ thumbnailMode }, "Failed to save Thumbnail mode")}
           />
+          <ToggleSettingRow
+            title="Simulate last joined"
+            description="グループインスタンスの「最後に入ってからの経過時間」を、実際の記録の代わりに見本の値（0m / 12m / 3h05m / 23h59m）で表示します。実際の記録は変更されません。"
+            isOn={appSettings.simulateLastJoined}
+            onToggle={(simulateLastJoined) => void saveAppSettings({ simulateLastJoined }, "Failed to save Simulate last joined")}
+          />
+          <ToggleSettingRow
+            title="Auth logging"
+            description="VRChat API へのリクエストと、認証・バックグラウンド取得・自動更新・ウィンドウ状態などの出来事をログファイルに詳しく記録します。cookie やパスワードの値は記録しません。"
+            isOn={appSettings.authLogging}
+            onToggle={(authLogging) => void saveAppSettings({ authLogging }, "Failed to save Auth logging")}
+          />
+          <div className="settings-row auth-log-folder-row">
+            <div className="settings-row-text">
+              <span className="settings-row-title">Auth log folder</span>
+              <span className="settings-row-description">auth.log の保存先フォルダを開きます。</span>
+            </div>
+            <button
+              className="btn-secondary auth-log-open-folder-button"
+              onClick={() => openAuthLogFolder().catch(() => onError("Failed to open the log folder"))}
+            >
+              Open folder
+            </button>
+          </div>
         </div>
       )}
     </div>

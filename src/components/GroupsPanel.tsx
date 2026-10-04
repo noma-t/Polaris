@@ -2,15 +2,19 @@ import { useRef, type CSSProperties } from "react";
 import { useElementHeight } from "../hooks/useElementHeight";
 import { REFRESH_COOLDOWN_SEC, type GroupInstancesState, type SortKey } from "../hooks/useGroupInstances";
 import { useNow } from "../hooks/useNow";
-import { formatClock } from "../lib/format";
-import type { Group, GroupAccessType, GroupInstance } from "../lib/social";
-import { ChevronDownIcon, GroupsIcon, VisibilityListIcon } from "./icons";
+import { formatClock, formatElapsed } from "../lib/format";
+import type { Group, GroupAccessType, GroupInstance, LastJoinedAt } from "../lib/social";
+import { ChevronDownIcon, GroupsIcon, MapPinIcon, VisibilityListIcon } from "./icons";
 import { OpenInstanceButton } from "./OpenInstanceButton";
 import { OverlayScrollArea } from "./OverlayScrollArea";
 
 interface GroupsPanelProps {
   groups: Group[];
   groupState: GroupInstancesState;
+  /** グループインスタンスの location → 自分が最後に入った時刻 (epoch ms) */
+  lastJoinedAt: LastJoinedAt;
+  /** 実記録の代わりに見本の経過時間を表示する (Developer 向け) */
+  isLastJoinedSimulated: boolean;
   shownGroupIds: Record<string, boolean>;
   collapsedGroupIds: Record<string, boolean>;
   onToggleCollapsed: (groupId: string) => void;
@@ -31,9 +35,14 @@ const ACCESS_TYPE_LABELS: Record<GroupAccessType, string> = {
   members: "Group",
 };
 
+/** Simulate last joined 中に、表示順で循環させて割り当てる経過時間 (ms)。桁数の違う表示を一通り確認できる */
+const SIMULATED_ELAPSED_MS = [0, 12 * 60_000, (3 * 60 + 5) * 60_000, (23 * 60 + 59) * 60_000];
+
 export function GroupsPanel({
   groups,
   groupState,
+  lastJoinedAt,
+  isLastJoinedSimulated,
   shownGroupIds,
   collapsedGroupIds,
   onToggleCollapsed,
@@ -46,6 +55,8 @@ export function GroupsPanel({
   const now = useNow(100, isCoolingCandidate);
   const cooldownMs = Math.min(REFRESH_COOLDOWN_SEC * 1000, Math.max(0, cooldownUntil - now));
   const isCooling = cooldownMs > 0;
+  // 分単位で表示する経過時間の再描画用
+  const elapsedNow = useNow(30_000);
   const shownGroups = groups.filter((g) => shownGroupIds[g.id]);
   const headerRef = useRef<HTMLDivElement>(null);
   // 1 カラム時は panel-header も sticky なので、group-card-header はその直下に貼り付ける
@@ -125,28 +136,42 @@ export function GroupsPanel({
                       <div className="group-list-message">{hasLoadFailed && !isLoading ? "Failed to load instances" : "Loading…"}</div>
                     )}
                     {instancesByGroup && count === 0 && <div className="group-list-message">No instances</div>}
-                    {rows.map((instance) => (
-                      <div key={instance.id} className="instance-row">
-                        <div className="instance-info">
-                          <div className="instance-primary">
-                            <span className="instance-world">{instance.worldName}</span>
-                            <span className={`instance-user-count ${instance.userCount >= instance.capacity ? "is-full" : ""}`}>
-                              ({instance.userCount}/{instance.capacity})
-                            </span>
+                    {rows.map((instance, index) => {
+                      const joinedAt = isLastJoinedSimulated
+                        ? elapsedNow - SIMULATED_ELAPSED_MS[index % SIMULATED_ELAPSED_MS.length]
+                        : lastJoinedAt[instance.id];
+                      const elapsed = joinedAt === undefined ? null : formatElapsed(joinedAt, elapsedNow);
+                      return (
+                        <div key={instance.id} className="instance-row">
+                          <div className="instance-info">
+                            <div className="instance-primary">
+                              <span className="instance-world">{instance.worldName}</span>
+                              <span className={`instance-user-count ${instance.userCount >= instance.capacity ? "is-full" : ""}`}>
+                                ({instance.userCount}/{instance.capacity})
+                              </span>
+                            </div>
+                            <div className="instance-secondary">
+                              <div className="instance-secondary-left">
+                                <span className="instance-access-type">{ACCESS_TYPE_LABELS[instance.accessType]}</span>
+                                {elapsed !== null && (
+                                  <span className="instance-last-joined" title="Time since you last joined">
+                                    <MapPinIcon size={14} />
+                                    {elapsed}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="instance-created" title="First seen by Polaris">
+                                {formatClock(instance.firstSeenAt)}
+                              </span>
+                            </div>
                           </div>
-                          <div className="instance-secondary">
-                            <span className="instance-access-type">{ACCESS_TYPE_LABELS[instance.accessType]}</span>
-                            <span className="instance-created" title="First seen by Polaris">
-                              {formatClock(instance.firstSeenAt)}
-                            </span>
-                          </div>
+                          <OpenInstanceButton
+                            disabledReason={openDisabledReason}
+                            onClick={() => onOpenInstance(instance.id, instance.worldName)}
+                          />
                         </div>
-                        <OpenInstanceButton
-                          disabledReason={openDisabledReason}
-                          onClick={() => onOpenInstance(instance.id, instance.worldName)}
-                        />
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

@@ -3,12 +3,13 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
+use crate::auth_log;
 use crate::background;
 use crate::game_monitor::GameState;
 use crate::vrchat_client::AuthError;
@@ -29,10 +30,20 @@ pub struct AppSettings {
     pub simulate_update_available: bool,
     /// サムネイル撮影用に、実 Friends を隠してダミーの Friends を表示する (developer_mode が有効な場合のみ効く)
     pub thumbnail_mode: bool,
+    /// グループインスタンスの「最後に入ってからの経過時間」を実記録の代わりに見本の値で表示する (developer_mode が有効な場合のみ効く)
+    pub simulate_last_joined: bool,
+    /// VRChat API へのリクエストと認証まわりの出来事を `auth.log` に記録する (developer_mode が有効な場合のみ効く)
+    pub auth_logging: bool,
     /// × でシステムトレイに格納し、ウィンドウを閉じている間もグループインスタンスの観測を続ける
     pub run_in_background: bool,
     /// OS へのログイン時に Polaris を起動する
     pub launch_at_startup: bool,
+}
+
+impl AppSettings {
+    pub fn is_auth_logging_enabled(&self) -> bool {
+        self.developer_mode && self.auth_logging
+    }
 }
 
 impl Default for AppSettings {
@@ -42,6 +53,8 @@ impl Default for AppSettings {
             developer_mode: false,
             simulate_update_available: false,
             thumbnail_mode: false,
+            simulate_last_joined: false,
+            auth_logging: false,
             run_in_background: false,
             launch_at_startup: false,
         }
@@ -140,16 +153,19 @@ fn read_file(path: &PathBuf) -> SettingsFile {
         .unwrap_or_default()
 }
 
+fn write_file(path: &Path, file: &SettingsFile) -> Result<(), AuthError> {
+    write_json(path, file).map_err(|err| AuthError::Unexpected(format!("Failed to save settings: {err}")))
+}
+
 /// 書き込み途中で落ちても元のファイルが壊れないよう、一時ファイルに書いてから置き換える
-fn write_file(path: &PathBuf, file: &SettingsFile) -> Result<(), AuthError> {
-    let to_error = |err: std::io::Error| AuthError::Unexpected(format!("Failed to save settings: {err}"));
+pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(to_error)?;
+        fs::create_dir_all(dir)?;
     }
-    let text = serde_json::to_string_pretty(file).map_err(|err| AuthError::Unexpected(err.to_string()))?;
+    let text = serde_json::to_string_pretty(value)?;
     let temp_path = path.with_extension("json.tmp");
-    fs::write(&temp_path, text).map_err(to_error)?;
-    fs::rename(&temp_path, path).map_err(to_error)
+    fs::write(&temp_path, text)?;
+    fs::rename(&temp_path, path)
 }
 
 /// 起動時に保存済みの launch.exe パスを読み込む
@@ -167,7 +183,7 @@ pub fn settings_load_app(app: AppHandle, state: State<'_, SettingsState>) -> Res
 }
 
 /// 自動起動の登録に失敗した場合は保存しない。
-/// 保存後、次の poll を待たずに launch.exe の存在確認とバックグラウンド実行の設定を反映する
+/// 保存後、次の poll を待たずに launch.exe の存在確認・バックグラウンド実行・認証ログの設定を反映する
 #[tauri::command]
 pub fn settings_save_app(
     app: AppHandle,
@@ -184,10 +200,20 @@ pub fn settings_save_app(
     }
     let launcher_path = settings.launcher_path.clone();
     let run_in_background = settings.run_in_background;
+    let is_auth_logging_enabled = settings.is_auth_logging_enabled();
+    // launcher_path は記録しない (ユーザー名を含みうる)
+    auth_log::log!(
+        "settings: saved runInBackground={} launchAtStartup={} developerMode={} authLogging={}",
+        settings.run_in_background,
+        settings.launch_at_startup,
+        settings.developer_mode,
+        settings.auth_logging
+    );
     file.app = settings;
     write_file(&path, &file)?;
     game.set_launcher_path(&app, launcher_path);
     background::apply(&app, run_in_background);
+    auth_log::set_enabled(is_auth_logging_enabled);
     Ok(())
 }
 

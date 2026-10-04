@@ -9,6 +9,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::header, Message};
 
+use crate::auth_log;
 use crate::vrchat_client::{VrchatClient, USER_AGENT};
 use crate::vrchat_models::{ApiFriend, ApiWorld};
 
@@ -33,6 +34,8 @@ pub enum PipelineEvent {
     FriendDelete { user_id: String },
     /// group の参加 / 脱退
     GroupsChanged,
+    /// 自分がインスタンスに入った (到着後の `wrld_…:…` 形式の location のみ)
+    UserLocation { location: String },
 }
 
 #[derive(Deserialize)]
@@ -87,10 +90,15 @@ pub fn parse_message(text: &str) -> Option<PipelineEvent> {
         }
         "friend-delete" => PipelineEvent::FriendDelete { user_id: friend()?.user_id },
         "group-joined" | "group-left" => PipelineEvent::GroupsChanged,
+        // 自分宛てのイベントなので userId は見ない。移動中 (`traveling`) や private は到着後の通知を待つ
+        "user-location" => {
+            let location = friend()?.location;
+            location.starts_with("wrld_").then_some(PipelineEvent::UserLocation { location })?
+        }
         _ => return None,
     };
     let has_user_id = match &event {
-        PipelineEvent::Connected | PipelineEvent::GroupsChanged => true,
+        PipelineEvent::Connected | PipelineEvent::GroupsChanged | PipelineEvent::UserLocation { .. } => true,
         PipelineEvent::FriendOnline { user_id, .. }
         | PipelineEvent::FriendActive { user_id, .. }
         | PipelineEvent::FriendOffline { user_id }
@@ -114,6 +122,7 @@ pub async fn run(client: VrchatClient, tx: mpsc::Sender<PipelineEvent>) {
                 }
             }
         }
+        auth_log::log!("pipeline: reconnecting in {}s", delay.as_secs());
         tokio::time::sleep(delay).await;
         delay = (delay * 2).min(RECONNECT_MAX_DELAY);
     }
@@ -127,6 +136,7 @@ enum ListenOutcome {
 async fn connect_and_listen(client: &VrchatClient, tx: &mpsc::Sender<PipelineEvent>) -> ListenOutcome {
     let disconnected = ListenOutcome::Disconnected { was_connected: false };
     let Some(token) = client.auth_token() else {
+        auth_log::log!("pipeline: no auth cookie cookies=[{}]", client.cookie_names().join(", "));
         return disconnected;
     };
     let url = format!("{PIPELINE_URL}?authToken={}", urlencoding::encode(&token));
@@ -135,9 +145,15 @@ async fn connect_and_listen(client: &VrchatClient, tx: &mpsc::Sender<PipelineEve
     };
     request.headers_mut().insert(header::USER_AGENT, header::HeaderValue::from_static(USER_AGENT));
 
-    let Ok((mut stream, _)) = tokio_tungstenite::connect_async(request).await else {
-        return disconnected;
+    // URL は認証トークンを含むので記録しない
+    let mut stream = match tokio_tungstenite::connect_async(request).await {
+        Ok((stream, _)) => stream,
+        Err(err) => {
+            auth_log::log!("pipeline: failed to connect: {err}");
+            return disconnected;
+        }
     };
+    auth_log::log!("pipeline: connected");
     if tx.send(PipelineEvent::Connected).await.is_err() {
         return ListenOutcome::ReceiverClosed;
     }
@@ -146,7 +162,14 @@ async fn connect_and_listen(client: &VrchatClient, tx: &mpsc::Sender<PipelineEve
     while let Some(message) = stream.next().await {
         let text = match message {
             Ok(Message::Text(text)) => text,
-            Ok(Message::Close(_)) | Err(_) => break,
+            Ok(Message::Close(frame)) => {
+                auth_log::log!("pipeline: closed by server {frame:?}");
+                break;
+            }
+            Err(err) => {
+                auth_log::log!("pipeline: connection error: {err}");
+                break;
+            }
             Ok(_) => continue,
         };
         if let Some(event) = parse_message(&text) {
@@ -155,6 +178,7 @@ async fn connect_and_listen(client: &VrchatClient, tx: &mpsc::Sender<PipelineEve
             }
         }
     }
+    auth_log::log!("pipeline: disconnected");
     ListenOutcome::Disconnected { was_connected: true }
 }
 
@@ -213,6 +237,23 @@ mod tests {
         let unknown = wrap("notification", serde_json::json!({ "id": "not_1" }));
         assert!(parse_message(&unknown).is_none());
         assert!(parse_message("not json").is_none());
+    }
+
+    #[test]
+    fn parses_own_location_without_user_id() {
+        let text = wrap("user-location", serde_json::json!({ "location": "wrld_abc:123~group(grp_1)" }));
+        assert!(matches!(
+            parse_message(&text),
+            Some(PipelineEvent::UserLocation { location }) if location == "wrld_abc:123~group(grp_1)"
+        ));
+    }
+
+    #[test]
+    fn ignores_own_location_while_traveling_or_private() {
+        for location in ["traveling", "private", "offline", ""] {
+            let text = wrap("user-location", serde_json::json!({ "userId": "usr_1", "location": location }));
+            assert!(parse_message(&text).is_none(), "{location:?} should be ignored");
+        }
     }
 
     #[test]
