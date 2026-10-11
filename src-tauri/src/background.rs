@@ -106,10 +106,14 @@ pub struct PollConditions {
 }
 
 impl PollConditions {
-    /// Run in background が有効で、ウィンドウが見えていない (トレイ格納・最小化) 間は Rust 側で観測を続ける。
-    /// ウィンドウ表示中はフロントエンドの自動更新が取得する
+    /// Run in background が有効で、ウィンドウが見えていない (トレイ格納・最小化) 間も観測を続ける
     pub fn should_poll(&self) -> bool {
-        self.is_enabled && self.has_window && (!self.is_visible.unwrap_or(true) || self.is_minimized.unwrap_or(false))
+        self.is_enabled && self.has_window && !self.is_window_shown()
+    }
+
+    /// メインウィンドウが表示中 (トレイ格納・最小化されていない)。OS への問い合わせに失敗した値は表示中として扱う
+    pub fn is_window_shown(&self) -> bool {
+        self.has_window && self.is_visible.unwrap_or(true) && !self.is_minimized.unwrap_or(false)
     }
 }
 
