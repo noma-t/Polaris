@@ -287,7 +287,8 @@ struct FullGroupInstances {
 
 /// 1 グループ分の取得 (`/groups/{id}/instances`) の結果
 struct GroupRefresh {
-    /// レスポンスを受け取った時刻 (epoch ms)。この API には取得時刻が無いので、受け取った時点を取得時刻とする
+    /// レスポンスを受け取った時刻 (epoch ms)。この API には取得時刻が無いので、受け取った時点を取得時刻とする。
+    /// 全グループ分の `fetched_at` と比べるため、VRChat の時計に換算した値を持つ
     fetched_at: i64,
     instances: Vec<ObservedGroupInstance>,
 }
@@ -407,6 +408,9 @@ struct SocialStore {
     has_group_instances_load_failed: bool,
     /// 最後に取得結果を反映した時刻 (epoch ms)
     group_instances_updated_at: Option<i64>,
+    /// 端末の時計 − VRChat の時計 (ms)。全グループ分の取得で観測した「受け取った時刻 − fetchedAt」の最小値。
+    /// キャッシュの古さや通信時間は大きくする方向にしか乗らないので、最小値を時計のずれとみなす
+    vrchat_clock_offset_ms: Option<i64>,
     /// 次に全グループ分を定期取得する時刻。None はすぐ取得する
     next_group_poll_at: Option<Instant>,
     /// グループインスタンスの snapshot を emit するたびに進める
@@ -507,9 +511,14 @@ impl SocialStore {
         })
     }
 
-    /// 全グループ分の取得結果を反映する。`fetched_at` は VRChat 側の取得時刻。
+    /// 全グループ分の取得結果を反映する。`fetched_at` は VRChat 側の取得時刻で、読み取れなければ None (受け取った時刻で代用する)。
     /// これより古い 1 グループ分の取得結果は不要になるので破棄する
-    fn apply_group_instances(&mut self, instances: Vec<ApiInstance>, fetched_at: i64, now_ms: i64) {
+    fn apply_group_instances(&mut self, instances: Vec<ApiInstance>, fetched_at: Option<i64>, now_ms: i64) {
+        if let Some(fetched_at) = fetched_at {
+            let offset = now_ms - fetched_at;
+            self.vrchat_clock_offset_ms = Some(self.vrchat_clock_offset_ms.map_or(offset, |current| current.min(offset)));
+        }
+        let fetched_at = fetched_at.unwrap_or(now_ms);
         let observed: Vec<_> = instances
             .into_iter()
             .filter(|inst| inst.owner_id.starts_with("grp_"))
@@ -535,7 +544,7 @@ impl SocialStore {
         self.prune_instance_seen();
     }
 
-    /// 1 グループ分の取得結果を反映する。受け取った時刻 `now_ms` を取得時刻とし、
+    /// 1 グループ分の取得結果を反映する。受け取った時刻 `now_ms` を VRChat の時計に換算して取得時刻とし、
     /// 全グループ分の取得結果より新しい間はこのグループの表示に使う
     fn apply_instances_of_group(&mut self, group_id: &str, instances: Vec<ApiGroupInstance>, now_ms: i64) {
         let observed: Vec<_> = instances
@@ -551,7 +560,8 @@ impl SocialStore {
             .filter(ObservedGroupInstance::is_displayable)
             .collect();
         self.record_first_seen(&observed, now_ms);
-        self.group_refreshes.insert(group_id.to_owned(), GroupRefresh { fetched_at: now_ms, instances: observed });
+        let fetched_at = now_ms - self.vrchat_clock_offset_ms.unwrap_or(0);
+        self.group_refreshes.insert(group_id.to_owned(), GroupRefresh { fetched_at, instances: observed });
         self.group_instances_updated_at = Some(now_ms);
         self.prune_instance_seen();
     }
@@ -879,14 +889,19 @@ impl Session {
         auth_log::log!("{message}");
         let received = list.instances.len();
         let applied = self.with_store(|store| {
-            store.apply_group_instances(list.instances, fetched_at, now_ms);
+            let previous_offset = store.vrchat_clock_offset_ms;
+            store.apply_group_instances(list.instances, parsed, now_ms);
             store.next_group_poll_at = Some(Instant::now() + next_poll_in);
-            store.displayed_group_instances().map_or(0, |instances| instances.len())
+            let offset = store.vrchat_clock_offset_ms.filter(|offset| previous_offset != Some(*offset));
+            (store.displayed_group_instances().map_or(0, |instances| instances.len()), offset)
         });
-        let Some(applied) = applied else {
+        let Some((applied, updated_offset)) = applied else {
             auth_log::log!("group instances: result discarded (signed out while fetching)");
             return Err(AuthError::Unauthorized);
         };
+        if let Some(offset) = updated_offset {
+            auth_log::log!("group instances: clock offset (local - VRChat) updated to {:.1}s", offset as f64 / 1000.0);
+        }
         auth_log::log!("group instances: {received} received, {applied} displayed");
         self.persist_instance_seen();
         Ok((fetched_at, applied))
@@ -899,7 +914,16 @@ impl Session {
             Err(error) => return Err(self.handle_error(error).await),
         };
         let received = instances.len();
-        self.with_store(|store| store.apply_instances_of_group(group_id, instances, now_epoch_ms())).ok_or(AuthError::Unauthorized)?;
+        let offset = self
+            .with_store(|store| {
+                store.apply_instances_of_group(group_id, instances, now_epoch_ms());
+                store.vrchat_clock_offset_ms
+            })
+            .ok_or(AuthError::Unauthorized)?;
+        auth_log::log!(
+            "group instances: {group_id} fetched, compared with all groups using clock offset {:.1}s",
+            offset.unwrap_or(0) as f64 / 1000.0
+        );
         self.persist_instance_seen();
         Ok(received)
     }
@@ -1399,13 +1423,13 @@ mod tests {
     #[test]
     fn keeps_first_seen_time_of_group_instances() {
         let mut store = SocialStore::default();
-        store.apply_group_instances(vec![api_instance("wrld_a:1", "public"), api_instance("wrld_a:2", "plus")], 100, 100);
+        store.apply_group_instances(vec![api_instance("wrld_a:1", "public"), api_instance("wrld_a:2", "plus")], Some(100), 100);
         let views = group_views(&store);
         assert_eq!(views.iter().map(|v| v.first_seen_at).collect::<Vec<_>>(), [100, 100]);
         assert_eq!(views[0].access_type, "public");
         assert_eq!(views[1].access_type, "plus");
 
-        store.apply_group_instances(vec![api_instance("wrld_a:2", "plus"), api_instance("wrld_a:3", "members")], 200, 200);
+        store.apply_group_instances(vec![api_instance("wrld_a:2", "plus"), api_instance("wrld_a:3", "members")], Some(200), 200);
         let views = group_views(&store);
         assert_eq!(views[0].first_seen_at, 100);
         assert_eq!(views[1].first_seen_at, 200);
@@ -1423,7 +1447,7 @@ mod tests {
             next_created_order: 5,
             ..SocialStore::default()
         };
-        store.apply_group_instances(vec![api_instance("wrld_a:1", "public"), api_instance("wrld_a:2", "public")], 900, 900);
+        store.apply_group_instances(vec![api_instance("wrld_a:1", "public"), api_instance("wrld_a:2", "public")], Some(900), 900);
         let views = group_views(&store);
         assert_eq!((views[0].first_seen_at, views[0].created_order), (100, 5));
         assert_eq!((views[1].first_seen_at, views[1].created_order), (900, 6));
@@ -1448,7 +1472,7 @@ mod tests {
         let mut store = SocialStore::default();
         store.apply_group_instances(
             vec![api_instance("wrld_a:1~group(grp_1)", "public"), api_instance("wrld_a:2~group(grp_1)", "public")],
-            100,
+            Some(100),
             100,
         );
 
@@ -1473,7 +1497,7 @@ mod tests {
         let mut store = SocialStore::default();
         let mut other = api_instance("wrld_a:9~group(grp_2)", "public");
         other.owner_id = "grp_2".into();
-        store.apply_group_instances(vec![api_instance("wrld_a:1~group(grp_1)", "public"), other.clone()], 100, 100);
+        store.apply_group_instances(vec![api_instance("wrld_a:1~group(grp_1)", "public"), other.clone()], Some(100), 100);
 
         store.apply_instances_of_group("grp_1", vec![api_group_instance("wrld_a:2~group(grp_1)~groupAccessType(plus)", 5)], 200);
         let views = group_views(&store);
@@ -1487,7 +1511,7 @@ mod tests {
         assert_eq!(store.instance_seen.get("wrld_a:9~group(grp_2)").map(|seen| seen.first_seen_at), Some(100));
 
         // それより新しい全グループ分の結果が届いたら、1 グループ分の結果は破棄する
-        store.apply_group_instances(vec![api_instance("wrld_a:1~group(grp_1)", "public"), other], 300, 300);
+        store.apply_group_instances(vec![api_instance("wrld_a:1~group(grp_1)", "public"), other], Some(300), 300);
         assert!(store.group_refreshes.is_empty());
         let views = group_views(&store);
         assert_eq!(views.iter().map(|v| v.id.as_str()).collect::<Vec<_>>(), ["wrld_a:1~group(grp_1)", "wrld_a:9~group(grp_2)"]);
@@ -1497,7 +1521,7 @@ mod tests {
     #[test]
     fn keeps_group_refresh_when_full_list_is_older() {
         let mut store = SocialStore::default();
-        store.apply_group_instances(vec![api_instance("wrld_a:1~group(grp_1)", "public")], 100, 100);
+        store.apply_group_instances(vec![api_instance("wrld_a:1~group(grp_1)", "public")], Some(100), 100);
         store.apply_instances_of_group(
             "grp_1",
             vec![api_group_instance("wrld_a:1~group(grp_1)", 3), api_group_instance("wrld_a:2~group(grp_1)", 1)],
@@ -1506,7 +1530,7 @@ mod tests {
         let seen = store.instance_seen["wrld_a:2~group(grp_1)"];
 
         // 手動更新より前に VRChat 側で取得された全グループ分の結果には wrld_a:2 が無いが、表示も記録も変えない
-        store.apply_group_instances(vec![api_instance("wrld_a:1~group(grp_1)", "public")], 150, 250);
+        store.apply_group_instances(vec![api_instance("wrld_a:1~group(grp_1)", "public")], Some(150), 250);
         let views = group_views(&store);
         assert_eq!(views.len(), 2);
         let x = group_view(&views, "wrld_a:2~group(grp_1)");
@@ -1515,12 +1539,44 @@ mod tests {
         // 手動更新より新しい全グループ分の結果に切り替わっても、観測記録は引き継ぐ
         store.apply_group_instances(
             vec![api_instance("wrld_a:1~group(grp_1)", "public"), api_instance("wrld_a:2~group(grp_1)", "public")],
-            300,
+            Some(300),
             300,
         );
         let views = group_views(&store);
         let x = group_view(&views, "wrld_a:2~group(grp_1)");
         assert_eq!((x.first_seen_at, x.created_order), (seen.first_seen_at, seen.created_order));
+    }
+
+    #[test]
+    fn compares_group_refresh_on_vrchat_clock() {
+        let mut store = SocialStore::default();
+        // 端末の時計が VRChat より 30 遅れている
+        store.apply_group_instances(vec![api_instance("wrld_a:1~group(grp_1)", "public")], Some(1000), 970);
+        store.apply_instances_of_group(
+            "grp_1",
+            vec![api_group_instance("wrld_a:1~group(grp_1)", 3), api_group_instance("wrld_a:2~group(grp_1)", 1)],
+            1000,
+        );
+        assert_eq!(store.group_refreshes["grp_1"].fetched_at, 1030);
+        let seen = store.instance_seen["wrld_a:2~group(grp_1)"];
+
+        // VRChat の時計で手動更新より前に取得された全グループ分の結果では、手動更新の表示を置き換えない
+        store.apply_group_instances(vec![api_instance("wrld_a:1~group(grp_1)", "public")], Some(1010), 990);
+        let views = group_views(&store);
+        let x = group_view(&views, "wrld_a:2~group(grp_1)");
+        assert_eq!((x.first_seen_at, x.created_order), (seen.first_seen_at, seen.created_order));
+    }
+
+    #[test]
+    fn uses_smallest_observed_clock_offset() {
+        let mut store = SocialStore::default();
+        store.apply_group_instances(vec![], Some(1000), 1050);
+        store.apply_group_instances(vec![], Some(2000), 2010);
+        store.apply_group_instances(vec![], Some(3000), 3080);
+        assert_eq!(store.vrchat_clock_offset_ms, Some(10));
+        // fetchedAt を読み取れなかった回は時計のずれの計算に使わない
+        store.apply_group_instances(vec![], None, 4000);
+        assert_eq!(store.vrchat_clock_offset_ms, Some(10));
     }
 
     #[test]
@@ -1536,7 +1592,7 @@ mod tests {
         let mut store = SocialStore::default();
         let mut not_group = api_instance("wrld_a:1", "public");
         not_group.owner_id = "usr_1".into();
-        store.apply_group_instances(vec![not_group], 100, 100);
+        store.apply_group_instances(vec![not_group], Some(100), 100);
         assert!(group_views(&store).is_empty());
     }
 
