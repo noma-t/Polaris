@@ -80,6 +80,7 @@ pub fn run() {
             auth_commands::auth_logout,
             auth_log::auth_log_open_folder,
             auth_log::auth_log_write,
+            background::background_set_update_badge,
             social_commands::social_get_friends,
             social_commands::social_get_groups,
             social_commands::social_get_group_instances,
