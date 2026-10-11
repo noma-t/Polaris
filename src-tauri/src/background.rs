@@ -1,7 +1,9 @@
 //! バックグラウンド常時実行 (× でシステムトレイに格納) とスタートアップ起動の制御。
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
@@ -14,10 +16,19 @@ const TRAY_ID: &str = "main-tray";
 const MENU_OPEN_ID: &str = "open";
 const MENU_QUIT_ID: &str = "quit";
 
+/// トレイアイコンに重ねる update バッジの色。サイドバーのバッジ (`--color-notice`) に合わせる
+const UPDATE_BADGE_RGB: [u8; 3] = [242, 200, 40];
+/// アイコンの一辺に対するバッジの半径の比率
+const UPDATE_BADGE_RADIUS_RATIO: f32 = 0.24;
+/// バッジの周囲をアイコンから切り抜く幅の比率。背景と同化しないよう縁取りとして使う
+const UPDATE_BADGE_GAP_RATIO: f32 = 0.06;
+
 /// Run in background が有効か。ウィンドウの close 要求時と定期取得の判定で参照する
 #[derive(Default)]
 pub struct BackgroundState {
     is_enabled: AtomicBool,
+    /// 検出済みの update の version。トレイアイコンのバッジとツールチップに反映する
+    update_version: Mutex<Option<String>>,
 }
 
 impl BackgroundState {
@@ -28,6 +39,77 @@ impl BackgroundState {
     pub fn is_enabled(&self) -> bool {
         self.is_enabled.load(Ordering::Relaxed)
     }
+
+    fn update_version(&self) -> Option<String> {
+        self.update_version.lock().expect("background state poisoned").clone()
+    }
+}
+
+/// 検出済みの update の version を記録し、トレイアイコンのバッジとツールチップに反映する。`None` で解除する
+#[tauri::command]
+pub fn background_set_update_badge(app: AppHandle, version: Option<String>) {
+    {
+        let state = app.state::<BackgroundState>();
+        let mut current = state.update_version.lock().expect("background state poisoned");
+        if *current == version {
+            return;
+        }
+        auth_log::log!("background: update badge {}", version.as_deref().unwrap_or("cleared"));
+        *current = version;
+    }
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let version = app.state::<BackgroundState>().update_version();
+        let _ = tray.set_tooltip(Some(tray_tooltip(version.as_deref())));
+        if let Some(icon) = tray_icon(&app, version.is_some()) {
+            let _ = tray.set_icon(Some(icon));
+        }
+    }
+}
+
+fn tray_tooltip(update_version: Option<&str>) -> String {
+    match update_version {
+        Some(version) => format!("Polaris - Update available (v{version})"),
+        None => "Polaris".to_string(),
+    }
+}
+
+fn tray_icon(app: &AppHandle, has_update: bool) -> Option<Image<'static>> {
+    let icon = app.default_window_icon()?;
+    Some(if has_update { with_update_badge(icon) } else { icon.clone().to_owned() })
+}
+
+/// アイコンの右上に update バッジ (縁を切り抜いた円) を描いた画像を返す
+fn with_update_badge(icon: &Image<'_>) -> Image<'static> {
+    let (width, height) = (icon.width(), icon.height());
+    let size = width.min(height) as f32;
+    let radius = size * UPDATE_BADGE_RADIUS_RATIO;
+    let gap = size * UPDATE_BADGE_GAP_RATIO;
+    let (center_x, center_y) = (width as f32 - radius, radius);
+    let mut rgba = icon.rgba().to_vec();
+    for y in 0..height {
+        for x in 0..width {
+            let distance = ((x as f32 + 0.5 - center_x).powi(2) + (y as f32 + 0.5 - center_y).powi(2)).sqrt();
+            // 境界の 1px をなめらかにするため、円に含まれる割合 (0〜1) で描く
+            let cutout = (radius + gap + 0.5 - distance).clamp(0.0, 1.0);
+            if cutout == 0.0 {
+                continue;
+            }
+            let coverage = (radius + 0.5 - distance).clamp(0.0, 1.0);
+            let pixel = &mut rgba[((y * width + x) * 4) as usize..][..4];
+            let base_alpha = pixel[3] as f32 / 255.0 * (1.0 - cutout);
+            let alpha = coverage + base_alpha * (1.0 - coverage);
+            for (channel, badge) in pixel[..3].iter_mut().zip(UPDATE_BADGE_RGB) {
+                let blended = if alpha > 0.0 {
+                    (badge as f32 * coverage + *channel as f32 * base_alpha * (1.0 - coverage)) / alpha
+                } else {
+                    0.0
+                };
+                *channel = blended.round() as u8;
+            }
+            pixel[3] = (alpha * 255.0).round() as u8;
+        }
+    }
+    Image::new_owned(rgba, width, height)
 }
 
 /// Run in background の設定を反映する。有効な間だけトレイアイコンを表示する
@@ -55,8 +137,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, MENU_OPEN_ID, "Open Polaris", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, MENU_QUIT_ID, "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quit])?;
+    let update_version = app.state::<BackgroundState>().update_version();
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip("Polaris")
+        .tooltip(tray_tooltip(update_version.as_deref()))
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -76,8 +159,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 show_main_window(tray.app_handle());
             }
         });
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
+    if let Some(icon) = tray_icon(app, update_version.is_some()) {
+        builder = builder.icon(icon);
     }
     builder.build(app)?;
     Ok(())
@@ -106,10 +189,14 @@ pub struct PollConditions {
 }
 
 impl PollConditions {
-    /// Run in background が有効で、ウィンドウが見えていない (トレイ格納・最小化) 間は Rust 側で観測を続ける。
-    /// ウィンドウ表示中はフロントエンドの自動更新が取得する
+    /// Run in background が有効で、ウィンドウが見えていない (トレイ格納・最小化) 間も観測を続ける
     pub fn should_poll(&self) -> bool {
-        self.is_enabled && self.has_window && (!self.is_visible.unwrap_or(true) || self.is_minimized.unwrap_or(false))
+        self.is_enabled && self.has_window && !self.is_window_shown()
+    }
+
+    /// メインウィンドウが表示中 (トレイ格納・最小化されていない)。OS への問い合わせに失敗した値は表示中として扱う
+    pub fn is_window_shown(&self) -> bool {
+        self.has_window && self.is_visible.unwrap_or(true) && !self.is_minimized.unwrap_or(false)
     }
 }
 

@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OverlayScrollArea } from "./components/OverlayScrollArea";
 import { PolarisLogo } from "./components/PolarisLogo";
 import { Sidebar } from "./components/Sidebar";
@@ -95,15 +95,19 @@ export default function App() {
   const displayedPinnedFriendIds = isThumbnailMode ? thumbnailPinnedIds : pinnedFriendIds;
   const onToggleDisplayedFriend = isThumbnailMode ? toggleThumbnailPinnedFriend : togglePinnedFriend;
   const changeSort = useCallback((sort: SortState) => updateUiState({ sort }), [updateUiState]);
-  const hasOpenGroup = screen === "instances" && groups.some((g) => shownGroupIds[g.id] && !collapsedGroupIds[g.id]);
+  /** 表示中かつ展開中のグループ。Instances 以外の画面にいる間は空にし、Rust 側の定期取得を止める */
+  const openGroupIds = useMemo(
+    () => (screen === "instances" ? groups.filter((g) => shownGroupIds[g.id] && !collapsedGroupIds[g.id]).map((g) => g.id) : []),
+    [screen, groups, shownGroupIds, collapsedGroupIds],
+  );
   useWindowDiagnostics();
-  // 自動更新の有無は screen と展開状態で決まるので、変化を残す (Instances 以外の画面にいる間は自動更新が止まる)
+  // 定期取得の有無は screen と展開状態で決まるので、変化を残す
   useEffect(() => {
-    diagnosticLog(`ui: screen=${screen} hasOpenGroup=${hasOpenGroup} groups=${groups.length}`);
-  }, [screen, hasOpenGroup, groups.length]);
+    diagnosticLog(`ui: screen=${screen} openGroups=${openGroupIds.length} groups=${groups.length}`);
+  }, [screen, openGroupIds.length, groups.length]);
   const groupState = useGroupInstances({
     isSignedIn: currentUser !== null,
-    hasOpenGroup,
+    openGroupIds,
     sort: uiState.sort,
     onSortChange: changeSort,
     onError: (message) => showToast(message, "error"),
@@ -135,7 +139,6 @@ export default function App() {
     } catch {
       showToast("Failed to clear the saved session", "error");
     }
-    groupState.reset();
     setVisibilityDialog(null);
     setCurrentUser(null);
   };

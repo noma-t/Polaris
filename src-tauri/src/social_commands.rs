@@ -1,10 +1,10 @@
-//! Friends / Groups の snapshot 取得・グループインスタンス取得と pinned friend 設定の Tauri コマンド。
+//! Friends / Groups / グループインスタンスの snapshot 取得・グループインスタンスの再取得と、pinned friend・展開中のグループ設定の Tauri コマンド。
 
 use std::collections::HashMap;
 
 use tauri::{AppHandle, Emitter, State};
 
-use crate::social::{FriendView, GroupInstanceListView, GroupInstanceView, GroupView, InstanceDetailView, SocialState, FRIENDS_UPDATED_EVENT};
+use crate::social::{FriendView, GroupInstancesView, GroupView, InstanceDetailView, SocialState, FRIENDS_UPDATED_EVENT};
 use crate::vrchat_client::AuthError;
 
 /// listen 開始前に emit された分を取りこぼさないよう、初期表示時に現在の snapshot を返す
@@ -24,19 +24,22 @@ pub fn social_get_last_joined(state: State<'_, SocialState>) -> HashMap<String, 
     state.last_joined_views()
 }
 
-/// 所属する全グループのインスタンスを VRChat API から取得する
+/// グループインスタンス一覧の現在の snapshot を返す
 #[tauri::command]
-pub async fn social_get_group_instances(state: State<'_, SocialState>) -> Result<GroupInstanceListView, AuthError> {
-    state.fetch_group_instances().await
+pub fn social_get_group_instances(state: State<'_, SocialState>) -> GroupInstancesView {
+    state.group_instances_view()
 }
 
-/// 指定した 1 グループのインスタンスを VRChat API から取得する
+/// 押されたグループのインスタンスを VRChat API から再取得する。結果は snapshot の emit で届く
 #[tauri::command]
-pub async fn social_get_instances_of_group(
-    state: State<'_, SocialState>,
-    group_id: String,
-) -> Result<Vec<GroupInstanceView>, AuthError> {
-    state.fetch_instances_of_group(&group_id).await
+pub async fn social_refresh_group(state: State<'_, SocialState>, group_id: String) -> Result<(), AuthError> {
+    state.refresh_group(&group_id).await
+}
+
+/// フロントエンドで表示中かつ展開中のグループを伝える。グループインスタンスの定期取得をするかの判断に使う
+#[tauri::command]
+pub fn social_set_open_groups(state: State<'_, SocialState>, group_ids: Vec<String>) {
+    state.set_open_groups(group_ids);
 }
 
 /// フレンドがいるインスタンスの詳細を VRChat API から取得する

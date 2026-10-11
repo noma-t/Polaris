@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 
@@ -30,6 +31,11 @@ export async function checkForUpdate({ simulate }: { simulate: boolean }): Promi
   if (simulate) return createSimulatedUpdate();
   const update = await check();
   return update && toAvailableUpdate(update);
+}
+
+/** 検出済みの update の version をトレイアイコンのバッジとツールチップに反映する。null で解除する */
+export async function setTrayUpdateBadge(version: string | null): Promise<void> {
+  await invoke("background_set_update_badge", { version });
 }
 
 function toAvailableUpdate(update: Update): AvailableUpdate {

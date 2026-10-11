@@ -42,10 +42,17 @@ export interface GroupInstance {
   createdOrder: number;
 }
 
-export interface GroupInstanceList {
-  /** VRChat 側でこの一覧が取得された時刻 (epoch ms)。レスポンスから読めなければ Polaris が受け取った時刻 */
-  fetchedAt: number;
-  instances: GroupInstance[];
+/** Rust 側が保持するグループインスタンス一覧の snapshot */
+export interface GroupInstancesSnapshot {
+  /** emit のたびに進む。これより古い snapshot では上書きしない */
+  revision: number;
+  /** 全グループ分の取得が 1 度も成功していない間は null */
+  instances: GroupInstance[] | null;
+  isLoading: boolean;
+  /** 全グループ分が未取得のまま取得に失敗した */
+  hasLoadFailed: boolean;
+  /** 最後に取得結果を反映した時刻 (epoch ms) */
+  updatedAt: number | null;
 }
 
 export type InstanceType = "public" | "friendsPlus" | "friends" | "invitePlus" | "invite" | "groupPublic" | "groupPlus" | "group";
@@ -77,12 +84,15 @@ export interface InstanceDetail {
 
 export const getFriends = () => invoke<Friend[]>("social_get_friends");
 export const getGroups = () => invoke<Group[]>("social_get_groups");
-export const getGroupInstances = () => invoke<GroupInstanceList>("social_get_group_instances");
+export const getGroupInstances = () => invoke<GroupInstancesSnapshot>("social_get_group_instances");
 /** グループインスタンスの location → 自分が最後に入った時刻 (epoch ms)。24 時間以上前の記録は含まれない */
 export type LastJoinedAt = Record<string, number>;
 
 export const getLastJoined = () => invoke<LastJoinedAt>("social_get_last_joined");
-export const getInstancesOfGroup =(groupId: string) => invoke<GroupInstance[]>("social_get_instances_of_group", { groupId });
+/** 押されたグループのインスタンスを再取得させる。結果は onGroupInstancesUpdated で届く */
+export const refreshGroupInstances = (groupId: string) => invoke<void>("social_refresh_group", { groupId });
+/** 表示中かつ展開中のグループを伝える。Rust 側が定期取得をするかの判断に使う */
+export const setOpenGroups = (groupIds: string[]) => invoke<void>("social_set_open_groups", { groupIds });
 export const getInstanceDetail = (location: string) => invoke<InstanceDetail>("social_get_instance_detail", { location });
 export const setPinnedFriends = (ids: string[]) => invoke<void>("social_set_pinned_friends", { ids });
 
@@ -90,6 +100,8 @@ export const onFriendsUpdated = (handler: (friends: Friend[]) => void): Promise<
   listen<Friend[]>("social://friends-updated", (event) => handler(event.payload));
 export const onGroupsUpdated = (handler: (groups: Group[]) => void): Promise<UnlistenFn> =>
   listen<Group[]>("social://groups-updated", (event) => handler(event.payload));
+export const onGroupInstancesUpdated = (handler: (snapshot: GroupInstancesSnapshot) => void): Promise<UnlistenFn> =>
+  listen<GroupInstancesSnapshot>("social://group-instances-updated", (event) => handler(event.payload));
 export const onLastJoinedUpdated = (handler: (lastJoinedAt: LastJoinedAt) => void): Promise<UnlistenFn> =>
   listen<LastJoinedAt>("social://last-joined-updated", (event) => handler(event.payload));
 export const onSessionExpired =(handler: () => void): Promise<UnlistenFn> =>
